@@ -1,8 +1,6 @@
-# Environment & secrets
 .env
 .env.local
 .env.*.local
-config.js
 
 # Vercel
 .vercel
