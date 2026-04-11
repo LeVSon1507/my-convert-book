@@ -469,6 +469,58 @@
       });
     }
 
+    async function retryFailedChunks(maxRetryRounds) {
+      const FAILED_MARKER = '[LỖI DỊCH ĐOẠN';
+
+      for (let round = 1; round <= maxRetryRounds; round++) {
+        if (isStopped) break;
+
+        const failedIndices = [];
+        translatedChunks.forEach(function findFailed(chunkText, chunkIndex) {
+          if (chunkText && chunkText.startsWith(FAILED_MARKER)) {
+            failedIndices.push(chunkIndex);
+          }
+        });
+
+        if (failedIndices.length === 0) break;
+
+        addLog(`\n🔄 Retry vòng ${round}/${maxRetryRounds}: ${failedIndices.length} đoạn lỗi`, 'accent');
+        document.getElementById('progressLabel').textContent = `🔄 Retry vòng ${round} — ${failedIndices.length} đoạn lỗi...`;
+
+        const roundDelay = round * 3000;
+        addLog(`  ⏳ Đợi ${roundDelay / 1000}s trước khi retry...`, 'info');
+        await sleep(roundDelay);
+
+        for (const failedIndex of failedIndices) {
+          if (isStopped) break;
+
+          const failedContent = translatedChunks[failedIndex];
+          const originalTextStart = failedContent.indexOf('\n\n');
+          if (originalTextStart === -1) continue;
+          const originalChunkText = failedContent.slice(originalTextStart + 2);
+          if (!originalChunkText.trim()) continue;
+
+          addLog(`  ▶ Retry đoạn ${failedIndex + 1}...`, 'info');
+
+          try {
+            const retranslated = await translateChunkWithRetry(originalChunkText, failedIndex, 2);
+            translatedChunks[failedIndex] = retranslated;
+            addLog(`  ✓ Đoạn ${failedIndex + 1} đã sửa!`, 'success');
+          } catch (retryError) {
+            addLog(`  ✗ Đoạn ${failedIndex + 1} vẫn lỗi: ${retryError.message}`, 'error');
+          }
+
+          await sleep(1500);
+        }
+      }
+
+      const remainingErrors = translatedChunks.filter(function checkStillFailed(chunkText) {
+        return chunkText && chunkText.startsWith(FAILED_MARKER);
+      }).length;
+
+      return remainingErrors;
+    }
+
 
     function updateProgress() {
       const percentage = totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0;
@@ -558,8 +610,16 @@
             document.getElementById('progressLabel').textContent = '⏹ Đã dừng';
             addLog('Đã dừng bởi người dùng.', 'warning');
           } else {
-            document.getElementById('progressLabel').textContent = '✅ Dịch hoàn tất!';
-            addLog(`🎉 Hoàn thành! Tổng thời gian: ${formatTime((Date.now() - startTime) / 1000)}`, 'success');
+            // Phase 2: Auto-retry failed chunks
+            const remainingErrors = await retryFailedChunks(3);
+
+            if (remainingErrors > 0) {
+              document.getElementById('progressLabel').textContent = `⚠️ Dịch xong — còn ${remainingErrors} đoạn lỗi`;
+              addLog(`⚠️ Hoàn thành với ${remainingErrors} đoạn vẫn lỗi sau retry. Tổng thời gian: ${formatTime((Date.now() - startTime) / 1000)}`, 'warning');
+            } else {
+              document.getElementById('progressLabel').textContent = '✅ Dịch hoàn tất!';
+              addLog(`🎉 Hoàn thành! Tổng thời gian: ${formatTime((Date.now() - startTime) / 1000)}`, 'success');
+            }
             showResult(translatedChunks.join('\n\n'));
           }
         } catch (fatalError) {
