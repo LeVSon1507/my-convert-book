@@ -1,9 +1,11 @@
     // ===== FIREBASE CLOUD SYNC (Firestore only — Spark free plan) =====
     // Text is split into 600K-char chunks stored in subcollection to stay under 1MB/doc limit.
     const FIRESTORE_CHUNK_SIZE = 600000;
+    const CLOUD_PROGRESS_PREFIX = 'progress_';
 
     let _fbAuth = null;
     let _fbDb = null;
+    let lastCloudProgressSavedAt = 0;
 
     function initFirebase() {
       const config = globalThis.FIREBASE_CONFIG;
@@ -114,10 +116,13 @@
         await docRef.set({
           fileName: originalFileName || 'unknown.txt',
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
           charCount: translatedText.length,
           model: getSelectedModel(),
           provider: getActiveProvider(),
           totalChunks: totalChunks,
+          completedChunks: totalChunks,
+          status: 'completed',
           textChunkCount: textChunks.length,
           promptTokens: usageStats.promptTokens,
           completionTokens: usageStats.completionTokens,
@@ -138,13 +143,123 @@
       }
     }
 
+    function sanitizeDocId(value) {
+      return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 180);
+    }
+
+    function buildProgressDocId(fileHash, provider, model, chunkSize, scopePercent) {
+      return CLOUD_PROGRESS_PREFIX + sanitizeDocId([fileHash || 'nofile', provider || 'na', model || 'na', chunkSize || '0', scopePercent || '100'].join('_'));
+    }
+
+    async function writeLargeTextSubcollection(docRef, collectionName, text) {
+      const value = String(text || '');
+      const chunks = [];
+      for (let i = 0; i < value.length; i += FIRESTORE_CHUNK_SIZE) {
+        chunks.push(value.slice(i, i + FIRESTORE_CHUNK_SIZE));
+      }
+      if (chunks.length === 0) chunks.push('');
+      await Promise.all(chunks.map(function(chunk, idx) {
+        return docRef.collection(collectionName).doc(String(idx)).set({ text: chunk });
+      }));
+      return chunks.length;
+    }
+
+    async function readLargeTextSubcollection(docRef, collectionName, chunkCount) {
+      const safeCount = Math.max(0, Number(chunkCount) || 0);
+      if (safeCount === 0) return '';
+      const snaps = await Promise.all(
+        Array.from({ length: safeCount }, function(_, i) { return docRef.collection(collectionName).doc(String(i)).get(); })
+      );
+      return snaps.map(function(s) { return s.data() ? s.data().text : ''; }).join('');
+    }
+
+    async function cloudSaveTranslationProgress(options) {
+      if (!currentFirebaseUser || !_fbDb) return;
+      const now = Date.now();
+      const force = Boolean(options?.force);
+      if (!force && now - lastCloudProgressSavedAt < 6000) return;
+      lastCloudProgressSavedAt = now;
+
+      const provider = options?.provider || getActiveProvider();
+      const model = options?.model || getSelectedModel();
+      const chunkSize = options?.chunkSize || (Number.parseInt(document.getElementById('chunkSize')?.value, 10) || 6000);
+      const scopePercent = options?.scopePercent || 100;
+      const translated = Array.isArray(options?.translatedChunks) ? options.translatedChunks : [];
+      const total = Number(options?.totalChunks) || translated.length;
+      const done = translated.filter(Boolean).length;
+      const status = options?.status || 'in_progress';
+      const fileHash = options?.fileHash || currentFileHash || '';
+      if (!fileHash || !total) return;
+
+      const uid = currentFirebaseUser.uid;
+      const docId = buildProgressDocId(fileHash, provider, model, chunkSize, scopePercent);
+      const docRef = _fbDb.collection('users').doc(uid).collection('translations').doc(docId);
+
+      const partialText = translated.filter(Boolean).join('\n\n');
+      const checkpointPayload = JSON.stringify({
+        translatedChunks: translated,
+        totalChunks: total
+      });
+
+      const [textChunkCount, checkpointChunkCount] = await Promise.all([
+        writeLargeTextSubcollection(docRef, 'chunks', partialText),
+        writeLargeTextSubcollection(docRef, 'checkpoint_chunks', checkpointPayload)
+      ]);
+
+      await docRef.set({
+        fileName: originalFileName || options?.fileName || 'unknown.txt',
+        fileHash: fileHash,
+        provider: provider,
+        model: model,
+        chunkSize: chunkSize,
+        scopePercent: scopePercent,
+        totalChunks: total,
+        completedChunks: done,
+        status: status,
+        charCount: partialText.length,
+        textChunkCount: textChunkCount,
+        checkpointChunkCount: checkpointChunkCount,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        completedAt: status === 'completed' ? firebase.firestore.FieldValue.serverTimestamp() : null
+      }, { merge: true });
+    }
+
+    async function cloudFindResumeCandidate(fileHash, provider, model, chunkSize, scopePercent) {
+      if (!currentFirebaseUser || !_fbDb || !fileHash) return null;
+      const uid = currentFirebaseUser.uid;
+      const docId = buildProgressDocId(fileHash, provider, model, chunkSize, scopePercent);
+      const docRef = _fbDb.collection('users').doc(uid).collection('translations').doc(docId);
+      const snap = await docRef.get();
+      if (!snap.exists) return null;
+      const data = snap.data() || {};
+      if (!Number(data.completedChunks) || Number(data.completedChunks) >= Number(data.totalChunks || 0)) return null;
+      return Object.assign({ id: docId }, data);
+    }
+
+    async function cloudLoadResumeCheckpoint(docId) {
+      if (!currentFirebaseUser || !_fbDb || !docId) return null;
+      const uid = currentFirebaseUser.uid;
+      const docRef = _fbDb.collection('users').doc(uid).collection('translations').doc(docId);
+      const snap = await docRef.get();
+      if (!snap.exists) return null;
+      const data = snap.data() || {};
+      const raw = await readLargeTextSubcollection(docRef, 'checkpoint_chunks', data.checkpointChunkCount);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed?.translatedChunks)) return null;
+      return {
+        translatedChunks: parsed.translatedChunks,
+        totalChunks: Number(parsed.totalChunks) || parsed.translatedChunks.length
+      };
+    }
+
     async function loadCloudHistory() {
       if (!currentFirebaseUser || !_fbDb) return;
       try {
         const uid = currentFirebaseUser.uid;
         const snap = await _fbDb
           .collection('users').doc(uid).collection('translations')
-          .orderBy('completedAt', 'desc')
+          .orderBy('updatedAt', 'desc')
           .limit(50)
           .get();
         cloudHistory = snap.docs.map(function(doc) {
@@ -195,10 +310,18 @@
         // Delete all text chunks first
         const metaDoc = cloudHistory.find(function(h) { return h.id === id; });
         const chunkCount = (metaDoc && metaDoc.textChunkCount) || 0;
+        const checkpointChunkCount = (metaDoc && metaDoc.checkpointChunkCount) || 0;
         if (chunkCount > 0) {
           await Promise.all(
             Array.from({ length: chunkCount }, function(_, i) {
               return docRef.collection('chunks').doc(String(i)).delete();
+            })
+          );
+        }
+        if (checkpointChunkCount > 0) {
+          await Promise.all(
+            Array.from({ length: checkpointChunkCount }, function(_, i) {
+              return docRef.collection('checkpoint_chunks').doc(String(i)).delete();
             })
           );
         }
