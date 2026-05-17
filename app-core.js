@@ -992,50 +992,51 @@
     function renderTranslationHistory() {
       const listEl = document.getElementById('historyList');
       if (!listEl) return;
-
-      if (currentFirebaseUser && cloudHistory.length > 0) {
-        listEl.innerHTML = '<div class="history-section-label">☁️ Cloud — đồng bộ mọi thiết bị (' + cloudHistory.length + ')</div>' +
-          cloudHistory.map(function(item) {
-            const timeSource = item.updatedAt || item.completedAt;
-            const when = timeSource?.seconds ? new Date(timeSource.seconds * 1000).toLocaleString('vi-VN') : '—';
-            const chars = item.charCount ? item.charCount.toLocaleString('vi-VN') + ' ký tự' : '';
-            const cost = item.cost ? ' · $' + item.cost.toFixed(4) : '';
-            const progressText = (Number(item.completedChunks) > 0 && Number(item.totalChunks) > 0)
-              ? (` · ${item.completedChunks}/${item.totalChunks} đoạn`)
-              : '';
-            const isInProgress = item.status === 'in_progress' || (Number(item.completedChunks) > 0 && Number(item.completedChunks) < Number(item.totalChunks || 0));
-            const fn = hEsc(item.fileName || 'unknown.txt');
-            const id = item.id;
-            return '<div class="history-item">' +
-              '<div class="history-item-info">' +
-                '<div class="history-item-name" title="' + fn + '">' + fn + '</div>' +
-                '<div class="history-item-meta">' + when + (item.model ? ' · ' + hEsc(item.model) : '') + progressText + '</div>' +
-                (chars ? '<div class="history-item-meta">' + chars + cost + '</div>' : '') +
-              '</div>' +
-              '<div class="history-item-actions">' +
-                '<button id="hist-dl-' + id + '" class="btn btn-secondary btn-sm" onclick="downloadCloudFile(\'' + id + '\',\'' + fn + '\')">⬇️ Tải về</button>' +
-                (isInProgress ? '<button class="btn btn-secondary btn-sm" onclick="resumeCloudHistoryItem(\'' + id + '\')">▶ Tiếp tục</button>' : '') +
-                '<button class="btn btn-danger btn-sm" onclick="deleteCloudFile(\'' + id + '\')">🗑</button>' +
-              '</div>' +
-            '</div>';
-          }).join('');
-        return;
-      }
-
-      if (currentFirebaseUser) {
-        listEl.innerHTML = '<div class="history-empty">☁️ Chưa có bản dịch nào trên cloud.<br><small>Bản dịch sẽ tự động lưu sau khi hoàn thành.</small></div>';
-        return;
-      }
-
+      let localList = [];
       try {
         const raw = localStorage.getItem(TRANSLATION_HISTORY_KEY);
-        const list = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
-        if (!list.length) {
-          listEl.innerHTML = '<div class="history-empty">Chưa có lịch sử dịch.<br><small>Đăng nhập để lưu và đồng bộ qua nhiều thiết bị.</small></div>';
-          return;
+        localList = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+      } catch {
+        localList = [];
+      }
+
+      let html = '';
+
+      if (currentFirebaseUser) {
+        if (cloudHistory.length > 0) {
+          html += '<div class="history-section-label">☁️ Cloud — đồng bộ mọi thiết bị (' + cloudHistory.length + ')</div>' +
+            cloudHistory.map(function(item) {
+              const timeSource = item.updatedAt || item.completedAt;
+              const when = timeSource?.seconds ? new Date(timeSource.seconds * 1000).toLocaleString('vi-VN') : '—';
+              const chars = item.charCount ? item.charCount.toLocaleString('vi-VN') + ' ký tự' : '';
+              const cost = item.cost ? ' · $' + item.cost.toFixed(4) : '';
+              const progressText = (Number(item.completedChunks) > 0 && Number(item.totalChunks) > 0)
+                ? (` · ${item.completedChunks}/${item.totalChunks} đoạn`)
+                : '';
+              const isInProgress = item.status === 'in_progress' || (Number(item.completedChunks) > 0 && Number(item.completedChunks) < Number(item.totalChunks || 0));
+              const fn = hEsc(item.fileName || 'unknown.txt');
+              const id = item.id;
+              return '<div class="history-item">' +
+                '<div class="history-item-info">' +
+                  '<div class="history-item-name" title="' + fn + '">' + fn + '</div>' +
+                  '<div class="history-item-meta">' + when + (item.model ? ' · ' + hEsc(item.model) : '') + progressText + '</div>' +
+                  (chars ? '<div class="history-item-meta">' + chars + cost + '</div>' : '') +
+                '</div>' +
+                '<div class="history-item-actions">' +
+                  '<button id="hist-dl-' + id + '" class="btn btn-secondary btn-sm" onclick="downloadCloudFile(\'' + id + '\',\'' + fn + '\')">⬇️ Tải về</button>' +
+                  (isInProgress ? '<button class="btn btn-secondary btn-sm" onclick="resumeCloudHistoryItem(\'' + id + '\')">▶ Tiếp tục</button>' : '') +
+                  '<button class="btn btn-danger btn-sm" onclick="deleteCloudFile(\'' + id + '\')">🗑</button>' +
+                '</div>' +
+              '</div>';
+            }).join('');
+        } else {
+          html += '<div class="history-empty">☁️ Chưa có bản dịch nào trên cloud.<br><small>Bản dịch sẽ tự động lưu sau khi hoàn thành.</small></div>';
         }
-        listEl.innerHTML = '<div class="history-section-label">💾 Chỉ trên thiết bị này</div>' +
-          list.map(function(item) {
+      }
+
+      if (localList.length > 0) {
+        html += '<div class="history-section-label">💾 Chỉ trên thiết bị này</div>' +
+          localList.map(function(item) {
             const when = new Date(item.completedAt).toLocaleString('vi-VN');
             const done = Number(item.completedChunks || 0);
             const total = Number(item.totalChunks || 0);
@@ -1057,9 +1058,12 @@
               '</div>' +
             '</div>';
           }).join('');
-      } catch {
-        listEl.innerHTML = '<div class="history-empty">Không đọc được lịch sử.</div>';
       }
+
+      if (!html) {
+        html = '<div class="history-empty">Chưa có lịch sử dịch.<br><small>Dịch xong 1 đoạn là tiến độ sẽ xuất hiện tại đây.</small></div>';
+      }
+      listEl.innerHTML = html;
     }
 
     async function resumeCloudHistoryItem(docId) {
