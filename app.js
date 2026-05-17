@@ -1,15 +1,6 @@
 
     function getRuntimeConfig() {
-      const publicConfig = globalThis.TRANSLATOR_CONFIG || {};
-      const localConfig = globalThis.TRANSLATOR_LOCAL_CONFIG || {};
-      return {
-        ...publicConfig,
-        ...localConfig,
-        keys: {
-          ...(publicConfig.keys || {}),
-          ...(localConfig.keys || {}),
-        }
-      };
+      return globalThis.TRANSLATOR_CONFIG || {};
     }
 
     let selectedFile = null;
@@ -70,7 +61,7 @@
       const config = getRuntimeConfig();
       const provider = config?.defaultProvider || 'openrouter';
       switchProvider(provider);
-      const apiKey = config?.keys?.[provider] || config?.defaultApiKey || '';
+      const apiKey = config?.keys?.[provider] || '';
       if (apiKey) document.getElementById('apiKey').value = apiKey;
       if (config?.defaultModel) {
         const select = document.getElementById('modelSelect');
@@ -180,8 +171,10 @@
         defaultModel: 'dphn/Dolphin-Mistral-24B-Venice-Edition',
         hint: 'Nhập Hugging Face token dạng hf_... (ô API Key bên trên)',
         models: [
-          { id: 'dphn/Dolphin3.0-Qwen2.5-3B', label: 'Dolphin 3.0 Qwen2.5 3B — rẻ nhất' },
-          { id: 'dphn/Dolphin3.0-Qwen2.5-7B', label: 'Dolphin 3.0 Qwen2.5 7B — rẻ + ổn định' },
+          { id: 'dphn/Dolphin3.0-Qwen2.5-0.5B', label: 'Dolphin 3.0 Qwen2.5 0.5B — rẻ nhất' },
+          { id: 'dphn/Dolphin3.0-Qwen2.5-1.5B', label: 'Dolphin 3.0 Qwen2.5 1.5B — rẻ + ổn định' },
+          { id: 'dphn/Dolphin3.0-Qwen2.5-3b', label: 'Dolphin 3.0 Qwen2.5 3B — bản nhỏ mạnh hơn' },
+          { id: 'dphn/dolphin-2.9.3-mistral-7B-32k', label: 'Dolphin 2.9.3 Mistral 7B 32k — bản cao hơn' },
           { id: 'dphn/dolphin-2.9.3-mistral-nemo-12b', label: 'Dolphin 2.9.3 Mistral Nemo 12B — cân bằng' },
           { id: 'dphn/dolphin-2.9.1-yi-1.5-34b', label: 'Dolphin 2.9.1 Yi 34B — chất lượng cao hơn' },
           { id: 'dphn/Dolphin-Mistral-24B-Venice-Edition', label: 'Dolphin Mistral 24B Venice Edition' },
@@ -191,14 +184,6 @@
           { id: '__custom__', label: '✏️ Nhập model ID...' },
         ]
       },
-      custom: {
-        baseUrl: '',
-        defaultModel: '',
-        hint: 'Nhập Base URL và Model ID tương thích OpenAI API',
-        models: [
-          { id: '__custom__', label: '✏️ Nhập model ID...' },
-        ]
-      }
     };
 
     // Model context length limits (in characters, approximate)
@@ -208,7 +193,6 @@
       'grok-3-mini-fast': 128000,
       'grok-3': 128000,
       'grok-3-fast': 128000,
-      'grok-2-1212': 128000,
       // OpenAI
       'gpt-4o-mini': 128000,
       'gpt-4o': 128000,
@@ -220,19 +204,6 @@
       'gemini-2.0-flash': 1000000,
       'gemini-2.0-flash-lite': 1000000,
       'gemini-1.5-pro': 2000000,
-      // OpenRouter models
-      'x-ai/grok-3-mini': 128000,
-      'x-ai/grok-3-mini:fast': 128000,
-      'x-ai/grok-3': 128000,
-      'x-ai/grok-3:fast': 128000,
-      'anthropic/claude-3.5-sonnet': 200000,
-      'anthropic/claude-3.5-haiku': 200000,
-      'google/gemini-2.5-pro-preview': 1000000,
-      'google/gemini-2.0-flash-001': 1000000,
-      'openai/gpt-4o-mini': 128000,
-      'openai/gpt-4o': 128000,
-      'deepseek/deepseek-chat-v3-0324': 64000,
-      'deepseek/deepseek-r1': 64000,
       // OpenRouter Mistral + Grok curated
       'mistralai/mistral-small-3.2-24b-instruct': 128000,
       'mistralai/mistral-nemo': 128000,
@@ -242,7 +213,14 @@
       'x-ai/grok-4-fast': 2000000,
       'x-ai/grok-4.20': 1000000,
       // Hugging Face models
+      'dphn/Dolphin3.0-Qwen2.5-0.5B': 32768,
+      'dphn/Dolphin3.0-Qwen2.5-1.5B': 32768,
+      'dphn/Dolphin3.0-Qwen2.5-3b': 32768,
+      'dphn/dolphin-2.9.3-mistral-7B-32k': 32768,
+      'dphn/dolphin-2.9.3-mistral-nemo-12b': 128000,
+      'dphn/dolphin-2.9.1-yi-1.5-34b': 128000,
       'dphn/Dolphin-Mistral-24B-Venice-Edition': 131072,
+      'dphn/dolphin-2.9.2-qwen2-72b': 128000,
       'mistralai/Mistral-Small-24B-Instruct-2501': 128000,
       'mistralai/Mistral-Small-24B-Base-2501': 128000,
     };
@@ -254,7 +232,6 @@
       'grok-3-mini-fast': { input: 0.30, output: 0.50 },
       'grok-3': { input: 5.00, output: 15.00 },
       'grok-3-fast': { input: 5.00, output: 15.00 },
-      'grok-2-1212': { input: 0.70, output: 1.40 },
       // OpenAI
       'gpt-4o-mini': { input: 0.15, output: 0.60 },
       'gpt-4o': { input: 2.50, output: 10.00 },
@@ -266,19 +243,6 @@
       'gemini-2.0-flash': { input: 0.10, output: 0.40 },
       'gemini-2.0-flash-lite': { input: 0.05, output: 0.20 },
       'gemini-1.5-pro': { input: 1.25, output: 5.00 },
-      // OpenRouter (varies by provider)
-      'x-ai/grok-3-mini': { input: 0.30, output: 0.50 },
-      'x-ai/grok-3-mini:fast': { input: 0.30, output: 0.50 },
-      'x-ai/grok-3': { input: 5.00, output: 15.00 },
-      'x-ai/grok-3:fast': { input: 5.00, output: 15.00 },
-      'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
-      'anthropic/claude-3.5-haiku': { input: 0.80, output: 4.00 },
-      'google/gemini-2.5-pro-preview': { input: 1.25, output: 5.00 },
-      'google/gemini-2.0-flash-001': { input: 0.10, output: 0.40 },
-      'openai/gpt-4o-mini': { input: 0.15, output: 0.60 },
-      'openai/gpt-4o': { input: 2.50, output: 10.00 },
-      'deepseek/deepseek-chat-v3-0324': { input: 0.27, output: 1.10 },
-      'deepseek/deepseek-r1': { input: 0.55, output: 2.19 },
       // OpenRouter Mistral + Grok curated
       'mistralai/mistral-small-3.2-24b-instruct': { input: 0.075, output: 0.20 },
       'mistralai/mistral-nemo': { input: 0.02, output: 0.04 },
@@ -289,7 +253,14 @@
       'x-ai/grok-4.1-fast': { input: 0.30, output: 0.60 },
       'x-ai/grok-4-fast': { input: 0.30, output: 0.60 },
       // Hugging Face routing varies by provider/hardware; placeholder for estimation UI
+      'dphn/Dolphin3.0-Qwen2.5-0.5B': { input: 0.01, output: 0.03 },
+      'dphn/Dolphin3.0-Qwen2.5-1.5B': { input: 0.02, output: 0.05 },
+      'dphn/Dolphin3.0-Qwen2.5-3b': { input: 0.03, output: 0.08 },
+      'dphn/dolphin-2.9.3-mistral-7B-32k': { input: 0.05, output: 0.12 },
+      'dphn/dolphin-2.9.3-mistral-nemo-12b': { input: 0.08, output: 0.20 },
+      'dphn/dolphin-2.9.1-yi-1.5-34b': { input: 0.20, output: 0.60 },
       'dphn/Dolphin-Mistral-24B-Venice-Edition': { input: 0.20, output: 0.60 },
+      'dphn/dolphin-2.9.2-qwen2-72b': { input: 0.50, output: 1.50 },
       'mistralai/Mistral-Small-24B-Instruct-2501': { input: 0.10, output: 0.30 },
       'mistralai/Mistral-Small-24B-Base-2501': { input: 0.10, output: 0.30 },
     };
@@ -1896,9 +1867,6 @@ Hãy sử dụng bản phân tích trên để:
 
       exportAs(continuedChunks, baseName, format);
     }
-
-    // Cached context for improve/rewrite operations
-    let cachedWritingContext = null;
 
     function renderWritingChunks() {
       const outputEl = document.getElementById('writingOutput');
