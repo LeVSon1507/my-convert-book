@@ -1,4 +1,17 @@
 
+    function getRuntimeConfig() {
+      const publicConfig = globalThis.TRANSLATOR_CONFIG || {};
+      const localConfig = globalThis.TRANSLATOR_LOCAL_CONFIG || {};
+      return {
+        ...publicConfig,
+        ...localConfig,
+        keys: {
+          ...(publicConfig.keys || {}),
+          ...(localConfig.keys || {}),
+        }
+      };
+    }
+
     let selectedFile = null;
     let fileContent = '';
     let translatedChunks = [];
@@ -11,6 +24,10 @@
     let isAnalysisRunning = false;
     let isWritingRunning = false;
     let wakeLockSentinel = null;
+    let cacheHits = 0;
+    let cacheMisses = 0;
+    let lastResultText = '';
+    let isPreviewExpanded = false;
 
     function hasActiveLongTask() {
       return isTranslationRunning || isAnalysisRunning || isWritingRunning;
@@ -50,7 +67,7 @@
 
 
     document.addEventListener('DOMContentLoaded', function applyAdminConfig() {
-      const config = globalThis.TRANSLATOR_CONFIG;
+      const config = getRuntimeConfig();
       const provider = config?.defaultProvider || 'openrouter';
       switchProvider(provider);
       const apiKey = config?.keys?.[provider] || config?.defaultApiKey || '';
@@ -81,6 +98,29 @@
     });
 
 
+    const OPENROUTER_MODEL_GROUPS = {
+      mistral_translation: {
+        defaultModel: 'mistralai/mistral-small-3.2-24b-instruct',
+        models: [
+          { id: 'mistralai/mistral-small-3.2-24b-instruct', label: 'Mistral Small 3.2 24B — cân bằng (khuyên dùng)' },
+          { id: 'mistralai/mistral-nemo', label: 'Mistral Nemo — rẻ nhất cho batch lớn' },
+          { id: 'mistralai/mistral-large-3-2512', label: 'Mistral Large 3 — chất lượng cao hơn' },
+          { id: 'mistralai/mistral-small-creative', label: 'Mistral Small Creative — truyện/roleplay' },
+          { id: '__custom__', label: '✏️ Nhập model ID...' },
+        ]
+      },
+      grok_budget: {
+        defaultModel: 'x-ai/grok-4.1-fast',
+        models: [
+          { id: 'x-ai/grok-4.1-fast', label: 'Grok 4.1 Fast — Recommended' },
+          { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast — cheap multimodal' },
+          { id: 'x-ai/grok-3-mini', label: 'Grok 3 Mini — cheapest reasoning' },
+          { id: 'x-ai/grok-4.20', label: 'Grok 4.20 — better quality' },
+          { id: '__custom__', label: '✏️ Nhập model ID...' },
+        ]
+      }
+    };
+
     const PROVIDER_CONFIGS = {
       grok: {
         baseUrl: 'https://api.x.ai/v1',
@@ -89,16 +129,15 @@
         models: [
           { id: 'grok-3-mini',      label: 'Grok 3 Mini — nhanh, tiết kiệm' },
           { id: 'grok-3-mini-fast', label: 'Grok 3 Mini Fast — cực nhanh' },
-          { id: 'grok-3',           label: 'Grok 3 — mạnh nhất xAI' },
-          { id: 'grok-3-fast',      label: 'Grok 3 Fast — mạnh + nhanh hơn' },
-          { id: 'grok-2-1212',      label: 'Grok 2 (1212) — thế hệ trước' },
+          { id: 'grok-3',           label: 'Grok 3 — ổn định cho tác vụ text' },
+          { id: 'grok-3-fast',      label: 'Grok 3 Fast — mạnh + nhanh' },
           { id: '__custom__',       label: '✏️ Nhập model ID...' },
         ]
       },
       openai: {
         baseUrl: 'https://api.openai.com/v1',
         defaultModel: 'gpt-4o-mini',
-        hint: 'API key tại platform.openai.com/api-keys',
+        hint: 'ChatGPT/OpenAI API key tại platform.openai.com/api-keys',
         models: [
           { id: 'gpt-4o-mini',      label: 'GPT-4o Mini — nhanh, rẻ nhất' },
           { id: 'gpt-4o',           label: 'GPT-4o — cân bằng tốc độ/chất lượng' },
@@ -122,22 +161,34 @@
       },
       openrouter: {
         baseUrl: 'https://openrouter.ai/api/v1',
-        defaultModel: 'x-ai/grok-3-mini',
-        hint: 'API key tại openrouter.ai/keys — truy cập 300+ models',
+        defaultModel: 'mistralai/mistral-small-3.2-24b-instruct',
+        hint: 'API key tại openrouter.ai/keys — dùng nhóm model Mistral/Grok rẻ',
         models: [
-          { id: 'x-ai/grok-3-mini',               label: 'Grok 3 Mini — nhanh, rẻ ⭐' },
-          { id: 'x-ai/grok-3-mini:fast',           label: 'Grok 3 Mini Fast — cực nhanh' },
-          { id: 'x-ai/grok-3',                     label: 'Grok 3 — flagship xAI' },
-          { id: 'x-ai/grok-3:fast',                label: 'Grok 3 Fast — mạnh + nhanh' },
-          { id: 'anthropic/claude-3.5-sonnet',     label: 'Claude 3.5 Sonnet — rất mạnh' },
-          { id: 'anthropic/claude-3.5-haiku',      label: 'Claude 3.5 Haiku — nhanh' },
-          { id: 'google/gemini-2.5-pro-preview',   label: 'Gemini 2.5 Pro — Google flagship' },
-          { id: 'google/gemini-2.0-flash-001',     label: 'Gemini 2.0 Flash — nhanh, rẻ' },
-          { id: 'openai/gpt-4o-mini',              label: 'GPT-4o Mini — OpenAI nhanh' },
-          { id: 'openai/gpt-4o',                   label: 'GPT-4o — OpenAI mạnh' },
-          { id: 'deepseek/deepseek-chat-v3-0324',  label: 'DeepSeek V3 — rẻ, chất lượng cao' },
-          { id: 'deepseek/deepseek-r1',            label: 'DeepSeek R1 — reasoning' },
-          { id: '__custom__',                      label: '✏️ Nhập model ID...' },
+          { id: 'mistralai/mistral-small-3.2-24b-instruct', label: 'Mistral Small 3.2 24B — cân bằng (khuyên dùng)' },
+          { id: 'mistralai/mistral-nemo', label: 'Mistral Nemo — rẻ nhất cho batch lớn' },
+          { id: 'mistralai/mistral-large-3-2512', label: 'Mistral Large 3 — chất lượng cao hơn' },
+          { id: 'mistralai/mistral-small-creative', label: 'Mistral Small Creative — truyện/roleplay' },
+          { id: 'x-ai/grok-4.1-fast', label: 'Grok 4.1 Fast — Recommended' },
+          { id: 'x-ai/grok-4-fast', label: 'Grok 4 Fast — cheap multimodal' },
+          { id: 'x-ai/grok-3-mini', label: 'Grok 3 Mini — cheapest reasoning' },
+          { id: 'x-ai/grok-4.20', label: 'Grok 4.20 — better quality' },
+          { id: '__custom__', label: '✏️ Nhập model ID...' },
+        ]
+      },
+      huggingface: {
+        baseUrl: 'https://router.huggingface.co/v1',
+        defaultModel: 'dphn/Dolphin-Mistral-24B-Venice-Edition',
+        hint: 'Nhập Hugging Face token dạng hf_... (ô API Key bên trên)',
+        models: [
+          { id: 'dphn/Dolphin3.0-Qwen2.5-3B', label: 'Dolphin 3.0 Qwen2.5 3B — rẻ nhất' },
+          { id: 'dphn/Dolphin3.0-Qwen2.5-7B', label: 'Dolphin 3.0 Qwen2.5 7B — rẻ + ổn định' },
+          { id: 'dphn/dolphin-2.9.3-mistral-nemo-12b', label: 'Dolphin 2.9.3 Mistral Nemo 12B — cân bằng' },
+          { id: 'dphn/dolphin-2.9.1-yi-1.5-34b', label: 'Dolphin 2.9.1 Yi 34B — chất lượng cao hơn' },
+          { id: 'dphn/Dolphin-Mistral-24B-Venice-Edition', label: 'Dolphin Mistral 24B Venice Edition' },
+          { id: 'dphn/dolphin-2.9.2-qwen2-72b', label: 'Dolphin 2.9.2 Qwen2 72B — bản lớn' },
+          { id: 'mistralai/Mistral-Small-24B-Instruct-2501', label: 'Mistral Small 24B Instruct 2501' },
+          { id: 'mistralai/Mistral-Small-24B-Base-2501', label: 'Mistral Small 24B Base 2501' },
+          { id: '__custom__', label: '✏️ Nhập model ID...' },
         ]
       },
       custom: {
@@ -150,18 +201,308 @@
       }
     };
 
+    // Model context length limits (in characters, approximate)
+    const MODEL_CONTEXT_LIMITS = {
+      // Grok
+      'grok-3-mini': 128000,
+      'grok-3-mini-fast': 128000,
+      'grok-3': 128000,
+      'grok-3-fast': 128000,
+      'grok-2-1212': 128000,
+      // OpenAI
+      'gpt-4o-mini': 128000,
+      'gpt-4o': 128000,
+      'o4-mini': 200000,
+      'o3-mini': 200000,
+      'gpt-4-turbo': 128000,
+      // Gemini
+      'gemini-2.5-pro-preview-03-25': 1000000,
+      'gemini-2.0-flash': 1000000,
+      'gemini-2.0-flash-lite': 1000000,
+      'gemini-1.5-pro': 2000000,
+      // OpenRouter models
+      'x-ai/grok-3-mini': 128000,
+      'x-ai/grok-3-mini:fast': 128000,
+      'x-ai/grok-3': 128000,
+      'x-ai/grok-3:fast': 128000,
+      'anthropic/claude-3.5-sonnet': 200000,
+      'anthropic/claude-3.5-haiku': 200000,
+      'google/gemini-2.5-pro-preview': 1000000,
+      'google/gemini-2.0-flash-001': 1000000,
+      'openai/gpt-4o-mini': 128000,
+      'openai/gpt-4o': 128000,
+      'deepseek/deepseek-chat-v3-0324': 64000,
+      'deepseek/deepseek-r1': 64000,
+      // OpenRouter Mistral + Grok curated
+      'mistralai/mistral-small-3.2-24b-instruct': 128000,
+      'mistralai/mistral-nemo': 128000,
+      'mistralai/mistral-large-3-2512': 262000,
+      'mistralai/mistral-small-creative': 128000,
+      'x-ai/grok-4.1-fast': 2000000,
+      'x-ai/grok-4-fast': 2000000,
+      'x-ai/grok-4.20': 1000000,
+      // Hugging Face models
+      'dphn/Dolphin-Mistral-24B-Venice-Edition': 131072,
+      'mistralai/Mistral-Small-24B-Instruct-2501': 128000,
+      'mistralai/Mistral-Small-24B-Base-2501': 128000,
+    };
+
+    // Token pricing (USD per 1M tokens) - approximate rates
+    const MODEL_PRICING = {
+      // Grok (via xAI direct)
+      'grok-3-mini': { input: 0.30, output: 0.50 },
+      'grok-3-mini-fast': { input: 0.30, output: 0.50 },
+      'grok-3': { input: 5.00, output: 15.00 },
+      'grok-3-fast': { input: 5.00, output: 15.00 },
+      'grok-2-1212': { input: 0.70, output: 1.40 },
+      // OpenAI
+      'gpt-4o-mini': { input: 0.15, output: 0.60 },
+      'gpt-4o': { input: 2.50, output: 10.00 },
+      'o4-mini': { input: 1.10, output: 4.40 },
+      'o3-mini': { input: 1.10, output: 4.40 },
+      'gpt-4-turbo': { input: 10.00, output: 30.00 },
+      // Gemini
+      'gemini-2.5-pro-preview-03-25': { input: 1.25, output: 5.00 },
+      'gemini-2.0-flash': { input: 0.10, output: 0.40 },
+      'gemini-2.0-flash-lite': { input: 0.05, output: 0.20 },
+      'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+      // OpenRouter (varies by provider)
+      'x-ai/grok-3-mini': { input: 0.30, output: 0.50 },
+      'x-ai/grok-3-mini:fast': { input: 0.30, output: 0.50 },
+      'x-ai/grok-3': { input: 5.00, output: 15.00 },
+      'x-ai/grok-3:fast': { input: 5.00, output: 15.00 },
+      'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
+      'anthropic/claude-3.5-haiku': { input: 0.80, output: 4.00 },
+      'google/gemini-2.5-pro-preview': { input: 1.25, output: 5.00 },
+      'google/gemini-2.0-flash-001': { input: 0.10, output: 0.40 },
+      'openai/gpt-4o-mini': { input: 0.15, output: 0.60 },
+      'openai/gpt-4o': { input: 2.50, output: 10.00 },
+      'deepseek/deepseek-chat-v3-0324': { input: 0.27, output: 1.10 },
+      'deepseek/deepseek-r1': { input: 0.55, output: 2.19 },
+      // OpenRouter Mistral + Grok curated
+      'mistralai/mistral-small-3.2-24b-instruct': { input: 0.075, output: 0.20 },
+      'mistralai/mistral-nemo': { input: 0.02, output: 0.04 },
+      'mistralai/mistral-large-3-2512': { input: 0.50, output: 1.50 },
+      'mistralai/mistral-small-creative': { input: 0.10, output: 0.30 },
+      'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
+      // Estimated "fast" pricing placeholders (adjust if your OpenRouter bill differs)
+      'x-ai/grok-4.1-fast': { input: 0.30, output: 0.60 },
+      'x-ai/grok-4-fast': { input: 0.30, output: 0.60 },
+      // Hugging Face routing varies by provider/hardware; placeholder for estimation UI
+      'dphn/Dolphin-Mistral-24B-Venice-Edition': { input: 0.20, output: 0.60 },
+      'mistralai/Mistral-Small-24B-Instruct-2501': { input: 0.10, output: 0.30 },
+      'mistralai/Mistral-Small-24B-Base-2501': { input: 0.10, output: 0.30 },
+    };
+
+    function getOptimalChunkSize(model) {
+      const limit = MODEL_CONTEXT_LIMITS[model] || 32000;
+      // Reserve generous room for prompt + output, use ~15% context for one chunk
+      const optimal = Math.floor(limit * 0.15);
+      // Allow larger chunks to reduce request count and repeated prompt tokens
+      return Math.max(2000, Math.min(optimal, 12000));
+    }
+
+    function getModelPricing(model) {
+      return MODEL_PRICING[model] || { input: 0.10, output: 0.20 }; // conservative default
+    }
+
+    function normalizeChunkForCache(content) {
+      return content
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .trim();
+    }
+
+    // Stable hash function for caching
+    async function hashContent(content) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(normalizeChunkForCache(content));
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function shouldSkipTranslation(chunkText) {
+      const text = (chunkText || '').trim();
+      if (!text) return true;
+      // Skip chunks that are mainly separators/punctuation/numbers
+      const letters = text.match(/[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/g);
+      return !letters || letters.length < 8;
+    }
+
+    function getMaxTokensForTranslation(chunkText) {
+      const estimatedInputTokens = estimateTokenCount((chunkText || '').length);
+      const softCap = Math.ceil(estimatedInputTokens * 1.35 + 120);
+      return Math.min(12000, Math.max(300, softCap));
+    }
+
+    function extractAssistantText(responseData) {
+      const directContent = responseData?.choices?.[0]?.message?.content;
+      if (typeof directContent === 'string' && directContent.trim()) return directContent;
+      if (Array.isArray(directContent)) {
+        const joined = directContent
+          .map(function(part) { return typeof part?.text === 'string' ? part.text : ''; })
+          .join('')
+          .trim();
+        if (joined) return joined;
+      }
+
+      const altText = responseData?.choices?.[0]?.text;
+      if (typeof altText === 'string' && altText.trim()) return altText;
+
+      const outputText = responseData?.output_text;
+      if (typeof outputText === 'string' && outputText.trim()) return outputText;
+
+      return '';
+    }
+
+    function normalizeTranslatedText(text) {
+      if (!text) return '';
+      let output = text.trim();
+      // Some providers still wrap in markdown fences; strip for cleaner export.
+      output = output.replace(/^```(?:text|markdown)?\s*/i, '').replace(/\s*```$/, '');
+      return output.trim();
+    }
+
+    // Caching system using localStorage
+    const CACHE_PREFIX = 'translator_cache_';
+    const CACHE_VERSION = '1';
+
+    function getCacheKey(chunkHash, model, provider) {
+      return `${CACHE_PREFIX}${CACHE_VERSION}:${provider}:${model}:${chunkHash}`;
+    }
+
+    async function getCachedTranslation(chunkHash, model, provider, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+      try {
+        const key = getCacheKey(chunkHash, model, provider);
+        const cached = localStorage.getItem(key);
+        if (!cached) return null;
+
+        const { translation, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp > maxAgeMs) {
+          localStorage.removeItem(key);
+          return null;
+        }
+        return translation;
+      } catch (e) {
+        console.warn('Cache read error:', e);
+        return null;
+      }
+    }
+
+    async function setCacheTranslation(chunkHash, model, provider, translation) {
+      try {
+        const key = getCacheKey(chunkHash, model, provider);
+        const entry = {
+          translation,
+          timestamp: Date.now()
+        };
+        localStorage.setItem(key, JSON.stringify(entry));
+      } catch (e) {
+        // Storage quota exceeded or disabled
+        console.warn('Cache write error:', e);
+      }
+    }
+
+    function estimateTokenCount(chars) {
+      // Approximate: Vietnamese ~2.5 chars per token, English ~4 chars per token
+      // Mixed text: use 3 as average
+      return Math.ceil(chars / 3);
+    }
+
+    function estimateCost(chars, model, isInput = true) {
+      const pricing = getModelPricing(model);
+      const tokens = estimateTokenCount(chars);
+      const rate = isInput ? pricing.input : pricing.output;
+      return (tokens / 1000000) * rate;
+    }
+
+    function updateCostEstimation() {
+      const fileInfoEl = document.getElementById('fileInfo');
+      const costCard = document.getElementById('costEstimationCard');
+      const costContent = document.getElementById('costEstimationContent');
+
+      if (!fileContent || !fileInfoEl.classList.contains('visible')) {
+        costCard.style.display = 'none';
+        return;
+      }
+
+      const model = getSelectedModel();
+      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
+      const totalChunks = Math.ceil(fileContent.length / chunkSize);
+
+      // Estimate total input tokens
+      const totalInputTokens = estimateTokenCount(fileContent.length);
+      const totalOutputTokens = totalInputTokens; // Assume 1:1 ratio for translation
+
+      const inputCost = estimateCost(fileContent.length, model, true);
+      const outputCost = estimateCost(fileContent.length, model, false);
+      const totalCost = inputCost + outputCost;
+
+      const pricing = getModelPricing(model);
+      const hasLowPricing = pricing.input < 0.5 && pricing.output < 1.0;
+
+      costContent.innerHTML = `
+        <div class="cost-item">
+          <span class="cost-label">📄 Tổng ký tự</span>
+          <span class="cost-value">${fileContent.length.toLocaleString('vi-VN')}</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">🔢 Số đoạn dự kiến</span>
+          <span class="cost-value">${totalChunks}</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">📥 Token đầu vào (ước)</span>
+          <span class="cost-value">${totalInputTokens.toLocaleString('vi-VN')}</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">📤 Token đầu ra (ước)</span>
+          <span class="cost-value">${totalOutputTokens.toLocaleString('vi-VN')}</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">💰 Chi phí ước tính</span>
+          <span class="cost-value highlight">$${totalCost.toFixed(4)} USD</span>
+        </div>
+        ${hasLowPricing ? `<div class="cost-note">✅ Model này có mức giá thấp, phù hợp dịch lớn</div>` : ''}
+      `;
+
+      costCard.style.display = 'block';
+    }
+
     function buildModelDropdown(provider) {
       const select = document.getElementById('modelSelect');
       const config = PROVIDER_CONFIGS[provider];
+      let models = config.models;
+
+      if (provider === 'openrouter') {
+        const groupSelect = document.getElementById('openrouterModelGroup');
+        const groupKey = groupSelect?.value || 'mistral_translation';
+        models = OPENROUTER_MODEL_GROUPS[groupKey]?.models || config.models;
+      }
+
       select.innerHTML = '';
-      config.models.forEach(function(modelInfo) {
+      models.forEach(function(modelInfo) {
         const option = document.createElement('option');
         option.value = modelInfo.id;
         option.textContent = modelInfo.label;
         select.appendChild(option);
       });
-      select.value = config.defaultModel;
+      if (provider === 'openrouter') {
+        const groupSelect = document.getElementById('openrouterModelGroup');
+        const groupKey = groupSelect?.value || 'mistral_translation';
+        const defaultGroupModel = OPENROUTER_MODEL_GROUPS[groupKey]?.defaultModel || config.defaultModel;
+        select.value = defaultGroupModel;
+      } else {
+        select.value = config.defaultModel;
+      }
       onModelSelectChange(select.value);
+    }
+
+    function onOpenRouterGroupChange() {
+      const activeProvider = document.querySelector('.tab.active')?.dataset?.provider;
+      if (activeProvider === 'openrouter') {
+        buildModelDropdown('openrouter');
+      }
     }
 
     function onModelSelectChange(selectedValue) {
@@ -169,6 +510,10 @@
       document.getElementById('customModelGroup').style.display = isCustom ? 'block' : 'none';
       if (!isCustom) {
         document.getElementById('modelName').value = selectedValue;
+      }
+      // Update cost estimation when model changes
+      if (fileContent) {
+        updateCostEstimation();
       }
     }
 
@@ -182,14 +527,21 @@
 
     function switchProvider(provider) {
       const config = PROVIDER_CONFIGS[provider];
+      const openrouterSubGroupEl = document.getElementById('openrouterSubGroup');
       document.getElementById('baseUrl').value = config.baseUrl;
       document.getElementById('modelHint').textContent = config.hint;
+      openrouterSubGroupEl.style.display = provider === 'openrouter' ? 'block' : 'none';
       buildModelDropdown(provider);
       loadSavedApiKey(provider);
 
       document.querySelectorAll('.tab').forEach(function(tab) {
         tab.classList.toggle('active', tab.dataset.provider === provider);
       });
+
+      // Update cost estimation when provider changes
+      if (fileContent) {
+        updateCostEstimation();
+      }
     }
 
 
@@ -221,13 +573,13 @@
     }
 
     function loadSavedApiKey(provider) {
-      const configKey = globalThis.TRANSLATOR_CONFIG?.keys?.[provider] || '';
+      const configKey = getRuntimeConfig()?.keys?.[provider] || '';
       const savedKey = localStorage.getItem('translator_api_key_' + provider);
       const keyToUse = savedKey || configKey;
       const hint = document.getElementById('keySavedHint');
       if (keyToUse) {
         document.getElementById('apiKey').value = keyToUse;
-        hint.textContent = savedKey ? '💾 Đã load key đã lưu cho ' + provider : '🔑 Key từ config.js';
+        hint.textContent = savedKey ? '💾 Đã load key đã lưu cho ' + provider : '🔑 Key từ cấu hình runtime';
         hint.style.display = 'block';
       } else {
         document.getElementById('apiKey').value = '';
@@ -268,12 +620,15 @@
           Ước tính ~${estimateChunks(fileContent.length)} đoạn cần dịch
         `;
         fileInfo.classList.add('visible');
+
+        // Update cost estimation
+        updateCostEstimation();
       };
       reader.readAsText(file, 'UTF-8');
     }
 
     function estimateChunks(charCount) {
-      const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 3000;
+      const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
       return Math.ceil(charCount / chunkSize);
     }
 
@@ -341,15 +696,35 @@
       return normalizedValue;
     }
 
+    function resetCacheStats() {
+      cacheHits = 0;
+      cacheMisses = 0;
+      updateCacheStatsUI();
+    }
 
-    async function translateChunkWithRetry(chunk, chunkIndex, maxRetries) {
+    function updateCacheStatsUI() {
+      const cacheStatEl = document.getElementById('cacheStat');
+      if (cacheStatEl) {
+        if (cacheHits > 0 || cacheMisses > 0) {
+          cacheStatEl.textContent = `Cache: ${cacheHits} hit, ${cacheMisses} miss`;
+          cacheStatEl.style.display = 'inline';
+        } else {
+          cacheStatEl.style.display = 'none';
+        }
+      }
+    }
+
+
+    async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null) {
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
+      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const systemPrompt = document.getElementById('systemPrompt').value.trim();
       const temperature = Number.parseFloat(document.getElementById('temperature').value);
 
       const url = `${baseUrl}/chat/completions`;
+      let currentChunk = chunk;
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -362,31 +737,63 @@
             body: JSON.stringify({
               model: modelName,
               temperature: temperature,
+              max_tokens: getMaxTokensForTranslation(currentChunk),
               messages: [
                 { role: 'system', content: systemPrompt },
-                { role: 'user', content: `Dịch đoạn văn bản sau sang tiếng Việt:\n\n${chunk}` }
+                { role: 'user', content: `Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n${currentChunk}` }
               ]
             })
           });
 
           if (!response.ok) {
             const errorBody = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errorBody}`);
+            const error = new Error(`HTTP ${response.status}: ${errorBody}`);
+            error.status = response.status;
+            throw error;
           }
 
           const responseData = await response.json();
-          const translatedText = responseData.choices?.[0]?.message?.content;
+          const translatedText = normalizeTranslatedText(extractAssistantText(responseData));
 
           if (!translatedText) {
             throw new Error('Phản hồi API không hợp lệ');
           }
 
+          // Cache the successful translation
+          if (chunkHash) {
+            await setCacheTranslation(chunkHash, modelName, provider, translatedText);
+          }
+
           return translatedText;
 
         } catch (translationError) {
+          const isRateLimit = translationError.status === 429;
+          const isContextError = translationError.status === 400 &&
+            (translationError.message.includes('context') ||
+             translationError.message.includes('too long') ||
+             translationError.message.includes('maximum'));
+
+          if (isRateLimit && attempt < maxRetries) {
+            // Exponential backoff with jitter
+            const baseDelay = Math.min(5000 * Math.pow(2, attempt), 30000);
+            const jitter = Math.random() * 1000;
+            addLog(`  ⚠ Đoạn ${chunkIndex + 1}: Rate limit, thử lại sau ${(baseDelay/1000).toFixed(1)}s...`, 'warning');
+            await sleep(baseDelay + jitter);
+            continue;
+          }
+
+          if (isContextError && currentChunk.length > 1000 && attempt < maxRetries) {
+            // Trim chunk by 20% and retry
+            const originalLength = currentChunk.length;
+            currentChunk = currentChunk.slice(0, Math.floor(currentChunk.length * 0.8));
+            addLog(`  ⚠ Đoạn ${chunkIndex + 1}: Context quá dài (${originalLength}→${currentChunk.length}), thử lại...`, 'warning');
+            continue;
+          }
+
           if (attempt === maxRetries) {
             throw translationError;
           }
+
           const retryDelay = attempt * 2000;
           addLog(`  ⚠ Đoạn ${chunkIndex + 1}: Thử lại (${attempt}/${maxRetries}) sau ${retryDelay}ms — ${translationError.message}`, 'warning');
           await sleep(retryDelay);
@@ -400,6 +807,11 @@
       let nextChunkIndex = 0;
       let activeRequests = 0;
       let scheduleTimer = null;
+      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const model = getSelectedModel();
+
+      // Reset cache stats for this translation run
+      resetCacheStats();
 
       return new Promise(function(resolve) {
         function queueSchedule(delayMs) {
@@ -418,35 +830,57 @@
           return false;
         }
 
-        function launchChunk(currentIndex) {
+        async function launchChunk(currentIndex) {
           const chunk = chunks[currentIndex];
           activeRequests++;
 
-          (async function() {
-            try {
+          try {
+            if (shouldSkipTranslation(chunk)) {
+              results[currentIndex] = chunk;
+              translatedChunks[currentIndex] = chunk;
+              completedChunks++;
+              updateProgress();
+              addLog(`↷ Bỏ qua đoạn ${currentIndex + 1} (không cần dịch)`, 'info');
+              return;
+            }
+
+            // Check cache first
+            const chunkHash = await hashContent(chunk);
+            const cached = await getCachedTranslation(chunkHash, model, provider);
+
+            if (cached) {
+              cacheHits++;
+              results[currentIndex] = cached;
+              translatedChunks[currentIndex] = cached;
+              completedChunks++;
+              updateProgress();
+              updateCacheStatsUI();
+              addLog(`✓ [CACHE] Đoạn ${currentIndex + 1}`, 'success');
+            } else {
+              cacheMisses++;
               addLog(`▶ Đang dịch đoạn ${currentIndex + 1}/${chunks.length}...`, 'info');
-              const translatedText = await translateChunkWithRetry(chunk, currentIndex, 3);
+              const translatedText = await translateChunkWithRetry(chunk, currentIndex, 3, chunkHash);
               results[currentIndex] = translatedText;
               translatedChunks[currentIndex] = translatedText;
               completedChunks++;
               updateProgress();
+              updateCacheStatsUI();
               addLog(`✓ Hoàn thành đoạn ${currentIndex + 1}`, 'success');
-            } catch (chunkError) {
-              results[currentIndex] = `[LỖI DỊCH ĐOẠN ${currentIndex + 1}: ${chunkError.message}]\n\n${chunk}`;
-              translatedChunks[currentIndex] = results[currentIndex];
-              completedChunks++;
-              updateProgress();
-              addLog(`✗ Lỗi đoạn ${currentIndex + 1}: ${chunkError.message}`, 'error');
             }
-
             const delayMs = Number.parseInt(document.getElementById('delayBetweenChunks').value, 10) || 0;
             if (delayMs > 0 && !isStopped) {
               await sleep(delayMs);
             }
-          })().finally(function() {
+          } catch (chunkError) {
+            results[currentIndex] = `[LỖI DỊCH ĐOẠN ${currentIndex + 1}: ${chunkError.message}]\n\n${chunk}`;
+            translatedChunks[currentIndex] = results[currentIndex];
+            completedChunks++;
+            updateProgress();
+            addLog(`✗ Lỗi đoạn ${currentIndex + 1}: ${chunkError.message}`, 'error');
+          } finally {
             activeRequests--;
             schedule();
-          });
+          }
         }
 
         function schedule() {
@@ -544,6 +978,9 @@
         const rate = completedChunks / elapsed;
         const remaining = (totalChunks - completedChunks) / rate;
         document.getElementById('statEta').textContent = formatTime(remaining);
+        document.getElementById('statSpeed').textContent = `${rate.toFixed(2)} đoạn/s`;
+      } else {
+        document.getElementById('statSpeed').textContent = '--';
       }
 
       document.title = `[${percentage}%] Đang dịch... — Trình Dịch Truyện AI`;
@@ -586,6 +1023,14 @@
       startTime = Date.now();
       completedChunks = 0;
       translatedChunks = [];
+
+      // Reset and show cache stats
+      resetCacheStats();
+      updateCacheStatsUI();
+      document.getElementById('cacheStatsContainer').style.display = 'block';
+
+      // Update cost estimation with current settings
+      updateCostEstimation();
 
       const chunks = splitIntoChunks(fileContent, chunkSize);
       totalChunks = chunks.length;
@@ -644,18 +1089,29 @@
 
     function applySpeedPreset(preset) {
       const presets = {
-        turbo:    { concurrent: 20, delay: 0,    chunkSize: 6000 },
-        balanced: { concurrent: 10, delay: 200,  chunkSize: 4000 },
-        safe:     { concurrent: 3,  delay: 1000, chunkSize: 3000 },
+        turbo:    { concurrent: 20, delay: 0,    chunkSize: 8000, temperature: 0.3 },
+        balanced: { concurrent: 10, delay: 200,  chunkSize: 6000, temperature: 0.3 },
+        safe:     { concurrent: 3,  delay: 1000, chunkSize: 5000, temperature: 0.2 },
+        economy:  { concurrent: 2,  delay: 2000, chunkSize: 6000, temperature: 0.2 },
       };
       const settings = presets[preset];
       if (!settings) return;
       document.getElementById('concurrentRequests').value = settings.concurrent;
       document.getElementById('delayBetweenChunks').value = settings.delay;
+      document.getElementById('temperature').value = settings.temperature;
+      document.getElementById('tempDisplay').textContent = settings.temperature;
+      document.getElementById('tempValue').textContent = settings.temperature;
       if (!isStopped && completedChunks === 0) {
-        document.getElementById('chunkSize').value = settings.chunkSize;
+        // Auto-adjust chunk size based on model if economy preset
+        if (preset === 'economy') {
+          const model = getSelectedModel();
+          const optimalSize = getOptimalChunkSize(model);
+          document.getElementById('chunkSize').value = Math.min(optimalSize, 8000);
+        } else {
+          document.getElementById('chunkSize').value = settings.chunkSize;
+        }
       }
-      addLog(`⚡ Preset "${preset}": ${settings.concurrent} song song · ${settings.delay}ms delay${completedChunks === 0 ? ` · chunk ${settings.chunkSize}` : ' (chunk size giữ nguyên vì đang dịch)'}`, 'accent');
+      addLog(`⚡ Preset "${preset}": ${settings.concurrent} song song · ${settings.delay}ms delay · temp ${settings.temperature}${completedChunks === 0 ? ` · chunk ${document.getElementById('chunkSize').value}` : ' (chunk size giữ nguyên vì đang dịch)'}`, 'accent');
     }
 
     function stopTranslation() {
@@ -665,16 +1121,39 @@
 
 
     function showResult(translatedText) {
+      lastResultText = translatedText || '';
+      isPreviewExpanded = false;
       const charCount = translatedText.length.toLocaleString('vi-VN');
       const elapsed = formatTime((Date.now() - startTime) / 1000);
 
       document.getElementById('resultSummary').textContent =
         `Dịch hoàn tất ${totalChunks} đoạn trong ${elapsed} · ${charCount} ký tự`;
 
-      document.getElementById('resultPreview').textContent = translatedText.slice(0, 500) + (translatedText.length > 500 ? '\n\n[...]' : '');
+      renderResultPreview();
 
       document.getElementById('resultSection').classList.add('visible');
       document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function renderResultPreview() {
+      const previewEl = document.getElementById('resultPreview');
+      const toggleBtn = document.getElementById('togglePreviewBtn');
+      if (!previewEl || !toggleBtn) return;
+
+      const hasLongText = lastResultText.length > 500;
+      const displayText = isPreviewExpanded || !hasLongText
+        ? lastResultText
+        : lastResultText.slice(0, 500) + '\n\n[...]';
+
+      previewEl.textContent = displayText;
+      previewEl.classList.toggle('full', isPreviewExpanded);
+      toggleBtn.style.display = hasLongText ? 'inline-flex' : 'none';
+      toggleBtn.textContent = isPreviewExpanded ? 'Thu gọn xem trước' : 'Mở rộng xem trước';
+    }
+
+    function toggleFullPreview() {
+      isPreviewExpanded = !isPreviewExpanded;
+      renderResultPreview();
     }
 
     function downloadPartial() {
@@ -825,6 +1304,8 @@ ${chunks.filter(Boolean).map(function(chunk) {
       dropZone.querySelector('.drop-subtitle').textContent = 'hoặc click để chọn file · Hỗ trợ .txt, .md, .text';
 
       document.getElementById('fileInfo').classList.remove('visible');
+      document.getElementById('costEstimationCard').style.display = 'none';
+      document.getElementById('cacheStatsContainer').style.display = 'none';
       document.getElementById('progressSection').classList.remove('visible');
       document.getElementById('resultSection').classList.remove('visible');
       document.getElementById('progressBarFill').style.width = '0%';

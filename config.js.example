@@ -1,11 +1,6 @@
 window.TRANSLATOR_CONFIG = {
   defaultProvider: 'openrouter',
   defaultModel: 'x-ai/grok-3-mini',
-  keys: {
-    grok:        '',  // https://console.x.ai
-    openai:      '',  // https://platform.openai.com/api-keys
-    gemini:      '',  // https://aistudio.google.com/app/apikey
-    openrouter:  '',  // https://openrouter.ai/keys
-    custom:      '',
-  },
+  // Public config only. Do NOT put secrets in this file.
+  keys: {},
 };
