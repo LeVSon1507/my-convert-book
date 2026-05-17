@@ -526,6 +526,16 @@
       width: 100%;
     }
 
+    #downloadPartialBtn,
+    #downloadWritingPartialBtn {
+      white-space: normal;
+      line-height: 1.35;
+      min-height: 52px;
+      text-align: center;
+      padding-top: 10px;
+      padding-bottom: 10px;
+    }
+
     .btn-lg {
       padding: 16px 32px;
       font-size: 16px;

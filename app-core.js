@@ -580,6 +580,19 @@
       return (tokens / 1000000) * rate;
     }
 
+    function getTranslationScopePercent() {
+      const raw = Number.parseInt(document.getElementById('translationScope')?.value, 10);
+      if (!Number.isFinite(raw)) return 100;
+      return Math.max(1, Math.min(100, raw));
+    }
+
+    function applyTranslationScope(chunks) {
+      const scope = getTranslationScopePercent();
+      if (scope >= 100) return chunks;
+      const scopedCount = Math.max(1, Math.ceil(chunks.length * (scope / 100)));
+      return chunks.slice(0, scopedCount);
+    }
+
     function updateCostEstimation() {
       const fileInfoEl = document.getElementById('fileInfo');
       const costCard = document.getElementById('costEstimationCard');
@@ -593,8 +606,10 @@
       const model = getSelectedModel();
       const provider = getActiveProvider();
       const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
-      const chunks = splitIntoChunks(fileContent, chunkSize);
+      const fullChunks = splitIntoChunks(fileContent, chunkSize);
+      const chunks = applyTranslationScope(fullChunks);
       const totalChunks = chunks.length;
+      const scopePercent = getTranslationScopePercent();
       const systemPrompt = document.getElementById('systemPrompt').value.trim();
       const glossaryPairs = parseGlossaryInput(document.getElementById('glossaryInput')?.value || '');
       const glossaryInstruction = buildGlossaryInstruction(glossaryPairs);
@@ -632,6 +647,10 @@
         <div class="cost-item">
           <span class="cost-label">📄 Tổng ký tự</span>
           <span class="cost-value">${fileContent.length.toLocaleString('vi-VN')}</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">🎯 Phạm vi dịch</span>
+          <span class="cost-value">${scopePercent}% ${scopePercent < 100 ? `(~${chunks.join('').length.toLocaleString('vi-VN')} ký tự)` : ''}</span>
         </div>
         <div class="cost-item">
           <span class="cost-label">🔢 Số đoạn dự kiến</span>
@@ -864,14 +883,14 @@
       }
     }
 
-    function getTranslationCheckpointKey(fileHash, provider, model, chunkSize) {
+    function getTranslationCheckpointKey(fileHash, provider, model, chunkSize, scopePercent) {
       if (!fileHash || !provider || !model || !chunkSize) return '';
-      return `${TRANSLATION_CHECKPOINT_PREFIX}${fileHash}:${provider}:${model}:${chunkSize}`;
+      return `${TRANSLATION_CHECKPOINT_PREFIX}${fileHash}:${provider}:${model}:${chunkSize}:${scopePercent || 100}`;
     }
 
-    function getTranslationCheckpoint(fileHash, provider, model, chunkSize) {
+    function getTranslationCheckpoint(fileHash, provider, model, chunkSize, scopePercent) {
       try {
-        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize, scopePercent);
         if (!key) return null;
         const raw = localStorage.getItem(key);
         if (!raw) return null;
@@ -881,9 +900,9 @@
       }
     }
 
-    function setTranslationCheckpoint(fileHash, provider, model, chunkSize, payload) {
+    function setTranslationCheckpoint(fileHash, provider, model, chunkSize, scopePercent, payload) {
       try {
-        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize, scopePercent);
         if (!key) return;
         localStorage.setItem(key, JSON.stringify(payload));
       } catch {
@@ -891,9 +910,9 @@
       }
     }
 
-    function clearTranslationCheckpoint(fileHash, provider, model, chunkSize) {
+    function clearTranslationCheckpoint(fileHash, provider, model, chunkSize, scopePercent) {
       try {
-        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize, scopePercent);
         if (!key) return;
         localStorage.removeItem(key);
       } catch {
@@ -1021,8 +1040,10 @@
         const modelName = getSelectedModel();
         const provider = getActiveProvider();
         const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
-        const currentChunks = splitIntoChunks(fileContent, chunkSize);
-        const checkpoint = getTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize);
+        const fullChunks = splitIntoChunks(fileContent, chunkSize);
+        const currentChunks = applyTranslationScope(fullChunks);
+        const scopePercent = getTranslationScopePercent();
+        const checkpoint = getTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize, scopePercent);
         const translatedList = Array.isArray(checkpoint?.translatedChunks) ? checkpoint.translatedChunks : [];
         const doneCount = translatedList.filter(Boolean).length;
         if (checkpoint && translatedList.length === currentChunks.length && doneCount > 0 && doneCount < currentChunks.length) {
@@ -1072,7 +1093,8 @@
       const modelName = getSelectedModel();
       const provider = getActiveProvider();
       const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
-      setTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize, {
+      const scopePercent = getTranslationScopePercent();
+      setTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize, scopePercent, {
         translatedChunks: translatedChunks,
         updatedAt: Date.now(),
         fileName: originalFileName
@@ -1486,6 +1508,7 @@
       const modelName = getSelectedModel();
       const baseUrl = document.getElementById('baseUrl').value.trim();
       const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10);
+      const scopePercent = getTranslationScopePercent();
       const concurrentRequests = getRuntimeConcurrentRequests();
 
       if (!apiKey) return showError('Vui lòng nhập API key.');
@@ -1510,7 +1533,8 @@
       // Update cost estimation with current settings
       updateCostEstimation();
 
-      const chunks = splitIntoChunks(fileContent, chunkSize);
+      const fullChunks = splitIntoChunks(fileContent, chunkSize);
+      const chunks = applyTranslationScope(fullChunks);
       totalChunks = chunks.length;
       const glossaryPairs = parseGlossaryInput(document.getElementById('glossaryInput')?.value || '');
       const glossaryInstruction = buildGlossaryInstruction(glossaryPairs);
@@ -1520,9 +1544,9 @@
         initialResults = pendingResumeCheckpoint.translatedChunks.slice();
         completedChunks = initialResults.filter(Boolean).length;
         translatedChunks = initialResults.slice();
-        addLog(`🧩 Resume checkpoint: tiếp tục từ đoạn ${completedChunks + 1}/${totalChunks}`, 'accent');
+        addLog(`🧩 Resume checkpoint (${scopePercent}%): tiếp tục từ đoạn ${completedChunks + 1}/${totalChunks}`, 'accent');
       } else {
-        clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize);
+        clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize, scopePercent);
       }
 
       document.getElementById('progressSection').classList.add('visible');
@@ -1533,7 +1557,7 @@
       document.getElementById('logContainer').innerHTML = '';
       document.getElementById('progressSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      addLog(`Bắt đầu dịch: ${totalChunks} đoạn · ${concurrentRequests} luồng song song`, 'accent');
+      addLog(`Bắt đầu dịch ${scopePercent}%: ${totalChunks} đoạn · ${concurrentRequests} luồng song song`, 'accent');
       addLog(`Model: ${modelName} @ ${baseUrl}`, 'info');
 
       updateProgress();
@@ -1548,7 +1572,7 @@
           if (isStopped) {
             document.getElementById('progressLabel').textContent = '⏹ Đã dừng';
             addLog('Đã dừng bởi người dùng.', 'warning');
-            setTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize, {
+            setTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize, scopePercent, {
               translatedChunks: translatedChunks,
               updatedAt: Date.now(),
               fileName: originalFileName
@@ -1564,7 +1588,7 @@
               document.getElementById('progressLabel').textContent = '✅ Dịch hoàn tất!';
               addLog(`🎉 Hoàn thành! Tổng thời gian: ${formatTime((Date.now() - startTime) / 1000)}`, 'success');
             }
-            clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize);
+            clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize, scopePercent);
             pushTranslationHistory({
               fileName: originalFileName || 'unknown',
               provider: getActiveProvider(),
@@ -1918,6 +1942,9 @@ ${chunks.filter(Boolean).map(function(chunk) {
         updateCostEstimation();
         updateWritingCostEstimation();
       }
+    });
+    document.getElementById('translationScope').addEventListener('change', function() {
+      if (fileContent) updateCostEstimation();
     });
     document.getElementById('glossaryInput').addEventListener('input', function() {
       if (fileContent) updateCostEstimation();
