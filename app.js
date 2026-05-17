@@ -24,13 +24,53 @@
     let openRouterPricingMap = null;
     let openRouterPricingLoadedAt = 0;
     let usageStats = { promptTokens: 0, completionTokens: 0, totalCost: 0 };
+    let pendingResumeCheckpoint = null;
+    let activeAppMode = 'translate';
+    const TRANSLATION_CHECKPOINT_PREFIX = 'translation_checkpoint_v1:';
+    const TRANSLATION_HISTORY_KEY = 'translation_history_v1';
 
     function hasActiveLongTask() {
       return isTranslationRunning || isAnalysisRunning || isWritingRunning;
     }
 
     function getActiveProvider() {
-      return document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      return document.querySelector('#providerTabs .tab.active')?.dataset?.provider || 'openrouter';
+    }
+
+    function switchAppMode(mode) {
+      activeAppMode = mode || 'translate';
+      document.querySelectorAll('#modeTabs .tab').forEach(function(tab) {
+        tab.classList.toggle('active', tab.dataset.mode === activeAppMode);
+      });
+      document.querySelectorAll('[data-mode-section]').forEach(function(section) {
+        section.style.display = section.dataset.modeSection === activeAppMode ? 'block' : 'none';
+      });
+      if (activeAppMode === 'history') renderTranslationHistory();
+    }
+
+    function parseGlossaryInput(rawGlossaryText) {
+      const lines = String(rawGlossaryText || '').split('\n');
+      const pairs = [];
+      lines.forEach(function(line) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const arrow = trimmed.includes('=>') ? '=>' : (trimmed.includes('->') ? '->' : null);
+        if (!arrow) return;
+        const parts = trimmed.split(arrow);
+        if (parts.length < 2) return;
+        const source = parts[0].trim();
+        const target = parts.slice(1).join(arrow).trim();
+        if (source && target) pairs.push({ source, target });
+      });
+      return pairs;
+    }
+
+    function buildGlossaryInstruction(glossaryPairs) {
+      if (!glossaryPairs || glossaryPairs.length === 0) return '';
+      const rows = glossaryPairs.map(function(pair) {
+        return `- ${pair.source} => ${pair.target}`;
+      }).join('\n');
+      return `\n\nBắt buộc dùng glossary sau khi dịch tên riêng/địa danh/thuật ngữ:\n${rows}\n- Ưu tiên tuyệt đối các mapping trên.\n- Giữ nhất quán giữa mọi đoạn.`;
     }
 
     function shouldUseOpenRouterResponseCache(baseUrl, provider) {
@@ -118,6 +158,8 @@
       }
       updateWritingCostEstimation();
       applySpeedPreset(DEFAULT_SPEED_PRESET, { silent: true, animate: false });
+      switchAppMode('translate');
+      renderTranslationHistory();
     });
     document.addEventListener('visibilitychange', function handleVisibilityChange() {
       if (!hasActiveLongTask()) return;
@@ -552,8 +594,10 @@
       const chunks = splitIntoChunks(fileContent, chunkSize);
       const totalChunks = chunks.length;
       const systemPrompt = document.getElementById('systemPrompt').value.trim();
+      const glossaryPairs = parseGlossaryInput(document.getElementById('glossaryInput')?.value || '');
+      const glossaryInstruction = buildGlossaryInstruction(glossaryPairs);
 
-      const promptOverheadChars = systemPrompt.length + 'Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n'.length;
+      const promptOverheadChars = (systemPrompt + glossaryInstruction).length + 'Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n'.length;
       const retryBufferFactor = 1.08;
       const outputExpansionFactor = 1.10;
 
@@ -713,7 +757,7 @@
     }
 
     function onOpenRouterGroupChange() {
-      const activeProvider = document.querySelector('.tab.active')?.dataset?.provider;
+      const activeProvider = getActiveProvider();
       if (activeProvider === 'openrouter') {
         buildModelDropdown('openrouter');
         ensureOpenRouterPricingLoaded().then(function() {
@@ -764,7 +808,7 @@
         });
       }
 
-      document.querySelectorAll('.tab').forEach(function(tab) {
+      document.querySelectorAll('#providerTabs .tab').forEach(function(tab) {
         tab.classList.toggle('active', tab.dataset.provider === provider);
       });
 
@@ -794,7 +838,7 @@
     }
 
     function clearApiKey() {
-      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const provider = getActiveProvider();
       localStorage.removeItem('translator_api_key_' + provider);
       document.getElementById('apiKey').value = '';
       const hint = document.getElementById('keySavedHint');
@@ -815,6 +859,75 @@
       } else {
         document.getElementById('apiKey').value = '';
         hint.style.display = 'none';
+      }
+    }
+
+    function getTranslationCheckpointKey(fileHash, provider, model, chunkSize) {
+      if (!fileHash || !provider || !model || !chunkSize) return '';
+      return `${TRANSLATION_CHECKPOINT_PREFIX}${fileHash}:${provider}:${model}:${chunkSize}`;
+    }
+
+    function getTranslationCheckpoint(fileHash, provider, model, chunkSize) {
+      try {
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        if (!key) return null;
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+
+    function setTranslationCheckpoint(fileHash, provider, model, chunkSize, payload) {
+      try {
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        if (!key) return;
+        localStorage.setItem(key, JSON.stringify(payload));
+      } catch {
+        // ignore quota
+      }
+    }
+
+    function clearTranslationCheckpoint(fileHash, provider, model, chunkSize) {
+      try {
+        const key = getTranslationCheckpointKey(fileHash, provider, model, chunkSize);
+        if (!key) return;
+        localStorage.removeItem(key);
+      } catch {
+        // noop
+      }
+    }
+
+    function pushTranslationHistory(record) {
+      try {
+        const raw = localStorage.getItem(TRANSLATION_HISTORY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(parsed) ? parsed : [];
+        list.unshift(record);
+        localStorage.setItem(TRANSLATION_HISTORY_KEY, JSON.stringify(list.slice(0, 40)));
+      } catch {
+        // noop
+      }
+    }
+
+    function renderTranslationHistory() {
+      const listEl = document.getElementById('historyList');
+      if (!listEl) return;
+      try {
+        const raw = localStorage.getItem(TRANSLATION_HISTORY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(parsed) ? parsed : [];
+        if (list.length === 0) {
+          listEl.textContent = 'Chưa có lịch sử dịch.';
+          return;
+        }
+        listEl.innerHTML = list.map(function(item) {
+          const when = new Date(item.completedAt).toLocaleString('vi-VN');
+          return `<div class="cost-item"><span class="cost-label">${item.fileName} · ${item.provider} · ${item.model}</span><span class="cost-value">${item.totalChunks} đoạn · ${when}</span></div>`;
+        }).join('');
+      } catch {
+        listEl.textContent = 'Không đọc được lịch sử.';
       }
     }
 
@@ -864,6 +977,26 @@
           currentFileHash = '';
         }
 
+        pendingResumeCheckpoint = null;
+        const resumePromptEl = document.getElementById('resumePrompt');
+        if (resumePromptEl) resumePromptEl.style.display = 'none';
+
+        const modelName = getSelectedModel();
+        const provider = getActiveProvider();
+        const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
+        const currentChunks = splitIntoChunks(fileContent, chunkSize);
+        const checkpoint = getTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize);
+        const translatedList = Array.isArray(checkpoint?.translatedChunks) ? checkpoint.translatedChunks : [];
+        const doneCount = translatedList.filter(Boolean).length;
+        if (checkpoint && translatedList.length === currentChunks.length && doneCount > 0 && doneCount < currentChunks.length) {
+          pendingResumeCheckpoint = checkpoint;
+          const promptTextEl = document.getElementById('resumePromptText');
+          if (promptTextEl) {
+            promptTextEl.textContent = `File này đã dịch ${doneCount}/${currentChunks.length} đoạn, tiếp tục từ đoạn ${doneCount + 1}?`;
+          }
+          if (resumePromptEl) resumePromptEl.style.display = 'flex';
+        }
+
         const persistedAnalysis = getCachedStoryAnalysis(currentFileHash);
         if (persistedAnalysis) {
           cachedStoryAnalysis = persistedAnalysis;
@@ -881,6 +1014,32 @@
     function estimateChunks(charCount) {
       const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
       return Math.ceil(charCount / chunkSize);
+    }
+
+    function acceptResumeFromCheckpoint() {
+      if (!pendingResumeCheckpoint) return;
+      const resumePromptEl = document.getElementById('resumePrompt');
+      if (resumePromptEl) resumePromptEl.style.display = 'none';
+      addLog('🧩 Sẽ tiếp tục từ checkpoint đã lưu khi bấm "Bắt đầu dịch".', 'info');
+    }
+
+    function ignoreResumeCheckpoint() {
+      pendingResumeCheckpoint = null;
+      const resumePromptEl = document.getElementById('resumePrompt');
+      if (resumePromptEl) resumePromptEl.style.display = 'none';
+      addLog('↺ Bỏ qua checkpoint cũ, sẽ dịch lại từ đầu.', 'info');
+    }
+
+    function persistCurrentTranslationCheckpoint() {
+      if (!currentFileHash || !translatedChunks || translatedChunks.length === 0) return;
+      const modelName = getSelectedModel();
+      const provider = getActiveProvider();
+      const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
+      setTranslationCheckpoint(currentFileHash, provider, modelName, chunkSize, {
+        translatedChunks: translatedChunks,
+        updatedAt: Date.now(),
+        fileName: originalFileName
+      });
     }
 
 
@@ -966,12 +1125,13 @@
     }
 
 
-    async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null) {
+    async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null, glossaryInstruction = '') {
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
       const provider = getActiveProvider();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
-      const systemPrompt = document.getElementById('systemPrompt').value.trim();
+      const baseSystemPrompt = document.getElementById('systemPrompt').value.trim();
+      const systemPrompt = `${baseSystemPrompt}${glossaryInstruction || ''}`;
       const temperature = Number.parseFloat(document.getElementById('temperature').value);
 
       const url = `${baseUrl}/chat/completions`;
@@ -1069,12 +1229,19 @@
     }
 
 
-    async function processChunksWithConcurrency(chunks) {
+    async function processChunksWithConcurrency(chunks, options) {
+      const opts = options || {};
+      const initialResults = Array.isArray(opts.initialResults) ? opts.initialResults : [];
+      const glossaryInstruction = opts.glossaryInstruction || '';
       const results = new Array(chunks.length).fill(null);
-      let nextChunkIndex = 0;
+      initialResults.forEach(function(val, idx) {
+        if (idx < results.length && typeof val === 'string' && val.trim()) results[idx] = val;
+      });
+      let nextChunkIndex = results.findIndex(function(item) { return !item; });
+      if (nextChunkIndex < 0) nextChunkIndex = chunks.length;
       let activeRequests = 0;
       let scheduleTimer = null;
-      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const provider = getActiveProvider();
       const model = getSelectedModel();
 
       // Reset cache stats for this translation run
@@ -1122,16 +1289,18 @@
               completedChunks++;
               updateProgress();
               updateCacheStatsUI();
+              persistCurrentTranslationCheckpoint();
               addLog(`✓ [CACHE] Đoạn ${currentIndex + 1}`, 'success');
             } else {
               cacheMisses++;
               addLog(`▶ Đang dịch đoạn ${currentIndex + 1}/${chunks.length}...`, 'info');
-              const translatedText = await translateChunkWithRetry(chunk, currentIndex, 3, chunkHash);
+              const translatedText = await translateChunkWithRetry(chunk, currentIndex, 3, chunkHash, glossaryInstruction);
               results[currentIndex] = translatedText;
               translatedChunks[currentIndex] = translatedText;
               completedChunks++;
               updateProgress();
               updateCacheStatsUI();
+              persistCurrentTranslationCheckpoint();
               addLog(`✓ Hoàn thành đoạn ${currentIndex + 1}`, 'success');
             }
             const delayMs = Number.parseInt(document.getElementById('delayBetweenChunks').value, 10) || 0;
@@ -1143,6 +1312,7 @@
             translatedChunks[currentIndex] = results[currentIndex];
             completedChunks++;
             updateProgress();
+            persistCurrentTranslationCheckpoint();
             addLog(`✗ Lỗi đoạn ${currentIndex + 1}: ${chunkError.message}`, 'error');
           } finally {
             activeRequests--;
@@ -1155,6 +1325,10 @@
 
           const desiredConcurrency = getRuntimeConcurrentRequests();
           while (!isStopped && activeRequests < desiredConcurrency && nextChunkIndex < chunks.length) {
+            while (nextChunkIndex < chunks.length && results[nextChunkIndex]) {
+              nextChunkIndex++;
+            }
+            if (nextChunkIndex >= chunks.length) break;
             launchChunk(nextChunkIndex);
             nextChunkIndex++;
           }
@@ -1204,7 +1378,9 @@
           addLog(`  ▶ Retry đoạn ${failedIndex + 1}...`, 'info');
 
           try {
-            const retranslated = await translateChunkWithRetry(originalChunkText, failedIndex, 2);
+            const glossaryPairs = parseGlossaryInput(document.getElementById('glossaryInput')?.value || '');
+            const glossaryInstruction = buildGlossaryInstruction(glossaryPairs);
+            const retranslated = await translateChunkWithRetry(originalChunkText, failedIndex, 2, null, glossaryInstruction);
             translatedChunks[failedIndex] = retranslated;
             addLog(`  ✓ Đoạn ${failedIndex + 1} đã sửa!`, 'success');
           } catch (retryError) {
@@ -1300,6 +1476,18 @@
 
       const chunks = splitIntoChunks(fileContent, chunkSize);
       totalChunks = chunks.length;
+      const glossaryPairs = parseGlossaryInput(document.getElementById('glossaryInput')?.value || '');
+      const glossaryInstruction = buildGlossaryInstruction(glossaryPairs);
+
+      let initialResults = new Array(totalChunks).fill(null);
+      if (pendingResumeCheckpoint && Array.isArray(pendingResumeCheckpoint.translatedChunks) && pendingResumeCheckpoint.translatedChunks.length === totalChunks) {
+        initialResults = pendingResumeCheckpoint.translatedChunks.slice();
+        completedChunks = initialResults.filter(Boolean).length;
+        translatedChunks = initialResults.slice();
+        addLog(`🧩 Resume checkpoint: tiếp tục từ đoạn ${completedChunks + 1}/${totalChunks}`, 'accent');
+      } else {
+        clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize);
+      }
 
       document.getElementById('progressSection').classList.add('visible');
       document.getElementById('resultSection').classList.remove('visible');
@@ -1316,11 +1504,19 @@
 
       const runTranslation = async function() {
         try {
-          translatedChunks = await processChunksWithConcurrency(chunks);
+          translatedChunks = await processChunksWithConcurrency(chunks, {
+            initialResults: initialResults,
+            glossaryInstruction: glossaryInstruction
+          });
 
           if (isStopped) {
             document.getElementById('progressLabel').textContent = '⏹ Đã dừng';
             addLog('Đã dừng bởi người dùng.', 'warning');
+            setTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize, {
+              translatedChunks: translatedChunks,
+              updatedAt: Date.now(),
+              fileName: originalFileName
+            });
           } else {
             // Phase 2: Auto-retry failed chunks
             const remainingErrors = await retryFailedChunks(3);
@@ -1332,6 +1528,14 @@
               document.getElementById('progressLabel').textContent = '✅ Dịch hoàn tất!';
               addLog(`🎉 Hoàn thành! Tổng thời gian: ${formatTime((Date.now() - startTime) / 1000)}`, 'success');
             }
+            clearTranslationCheckpoint(currentFileHash, getActiveProvider(), modelName, chunkSize);
+            pushTranslationHistory({
+              fileName: originalFileName || 'unknown',
+              provider: getActiveProvider(),
+              model: modelName,
+              totalChunks: totalChunks,
+              completedAt: Date.now()
+            });
             showResult(translatedChunks.join('\n\n'));
           }
         } catch (fatalError) {
@@ -1344,6 +1548,9 @@
           document.getElementById('startBtn').disabled = false;
           document.getElementById('stopBtn').style.display = 'none';
           document.title = 'Trình Dịch Truyện AI';
+          pendingResumeCheckpoint = null;
+          const resumePromptEl = document.getElementById('resumePrompt');
+          if (resumePromptEl) resumePromptEl.style.display = 'none';
         }
       };
 
@@ -1596,6 +1803,7 @@ ${chunks.filter(Boolean).map(function(chunk) {
       translatedChunks = [];
       originalFileName = '';
       cachedStoryAnalysis = null;
+      pendingResumeCheckpoint = null;
 
       document.getElementById('fileInput').value = '';
       const dropZone = document.getElementById('dropZone');
@@ -1607,6 +1815,8 @@ ${chunks.filter(Boolean).map(function(chunk) {
       document.getElementById('fileInfo').classList.remove('visible');
       document.getElementById('costEstimationCard').style.display = 'none';
       document.getElementById('cacheStatsContainer').style.display = 'none';
+      const resumePromptEl = document.getElementById('resumePrompt');
+      if (resumePromptEl) resumePromptEl.style.display = 'none';
       document.getElementById('progressSection').classList.remove('visible');
       document.getElementById('resultSection').classList.remove('visible');
       document.getElementById('progressBarFill').style.width = '0%';
@@ -1670,6 +1880,9 @@ ${chunks.filter(Boolean).map(function(chunk) {
         updateCostEstimation();
         updateWritingCostEstimation();
       }
+    });
+    document.getElementById('glossaryInput').addEventListener('input', function() {
+      if (fileContent) updateCostEstimation();
     });
     document.getElementById('writingChunkCount').addEventListener('input', updateWritingCostEstimation);
     document.getElementById('plotDirection').addEventListener('input', updateWritingCostEstimation);
