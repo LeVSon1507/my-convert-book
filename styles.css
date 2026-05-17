@@ -30,6 +30,11 @@
       padding: 0;
     }
 
+    *:focus-visible {
+      outline: 2px solid var(--accent-secondary);
+      outline-offset: 2px;
+    }
+
     body {
       font-family: 'Inter', sans-serif;
       background: var(--bg-primary);
@@ -425,6 +430,8 @@
       cursor: pointer;
       transition: all 0.2s;
       text-decoration: none;
+      min-height: 44px;
+      -webkit-tap-highlight-color: transparent;
     }
 
     .btn-primary {
@@ -447,6 +454,43 @@
     .btn-secondary:hover:not(:disabled) {
       border-color: var(--border-bright);
       background: var(--bg-card-hover);
+    }
+
+    .speed-preset-btn {
+      position: relative;
+    }
+
+    .speed-preset-btn.active {
+      border-color: var(--accent-primary);
+      background: rgba(108, 99, 255, 0.14);
+      box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.22), 0 8px 18px rgba(108, 99, 255, 0.22);
+      color: var(--text-primary);
+      transform: translateY(-1px);
+    }
+
+    .speed-preset-btn.active span {
+      color: #c3c9dd !important;
+    }
+
+    .speed-preset-btn.is-applying::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      border: 1px solid rgba(167, 139, 250, 0.65);
+      animation: speedPresetPulse 0.45s ease-out;
+      pointer-events: none;
+    }
+
+    @keyframes speedPresetPulse {
+      0% {
+        opacity: 0.9;
+        transform: scale(0.98);
+      }
+      100% {
+        opacity: 0;
+        transform: scale(1.04);
+      }
     }
 
     .btn-success {
@@ -661,6 +705,7 @@
     /* Tabs for API provider */
     .tabs {
       display: flex;
+      flex-wrap: wrap;
       gap: 4px;
       background: var(--bg-secondary);
       border-radius: var(--radius-sm);
@@ -669,7 +714,8 @@
     }
 
     .tab {
-      flex: 1;
+      flex: 1 1 120px;
+      min-width: 0;
       padding: 8px 12px;
       text-align: center;
       border-radius: 6px;
@@ -681,6 +727,44 @@
       border: none;
       background: none;
       font-family: 'Inter', sans-serif;
+      white-space: normal;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      min-height: 44px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .format-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+
+    .format-row-lg {
+      gap: 12px;
+    }
+
+    .format-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-primary);
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      min-height: 40px;
+    }
+
+    .format-option-sm {
+      font-size: 12px;
+      gap: 4px;
+      padding: 6px 8px;
+      min-height: 34px;
     }
 
     .tab:hover {
@@ -754,6 +838,19 @@
       display: block;
     }
 
+    .writing-result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .btn-sm {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
     .btn-writing {
       background: linear-gradient(135deg, #f59e0b, #d97706);
       color: white;
@@ -778,6 +875,10 @@
       color: var(--text-primary);
       white-space: pre-wrap;
       word-break: break-word;
+    }
+
+    .writing-output.is-collapsed {
+      display: none;
     }
 
     .writing-chunk-block {
@@ -866,17 +967,72 @@
     }
 
     /* Responsive */
+    @media (max-width: 768px) {
+      .app-wrapper {
+        padding: 20px 14px calc(90px + env(safe-area-inset-bottom));
+      }
+
+      .header {
+        margin-bottom: 24px;
+      }
+
+      .card {
+        padding: 16px;
+        border-radius: var(--radius-lg);
+      }
+
+      .button-row {
+        flex-direction: column;
+      }
+
+      .progress-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+
+      .progress-stats {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
     @media (max-width: 600px) {
+      .tabs {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        width: 100%;
+      }
+
+      .tab {
+        width: 100%;
+        min-width: 0;
+        flex: none;
+        padding: 10px 8px;
+        font-size: 12px;
+      }
+
       .input-row {
         grid-template-columns: 1fr;
       }
       .progress-stats {
         grid-template-columns: 1fr 1fr;
       }
-      .button-row {
-        flex-direction: column;
-      }
       .writing-settings-grid {
+        grid-template-columns: 1fr;
+      }
+      .writing-result-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .format-option {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .tabs {
         grid-template-columns: 1fr;
       }
     }

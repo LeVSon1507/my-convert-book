@@ -19,9 +19,54 @@
     let cacheMisses = 0;
     let lastResultText = '';
     let isPreviewExpanded = false;
+    let isWritingOutputCollapsed = true;
+    let currentFileHash = '';
+    let openRouterPricingMap = null;
+    let openRouterPricingLoadedAt = 0;
+    let usageStats = { promptTokens: 0, completionTokens: 0, totalCost: 0 };
 
     function hasActiveLongTask() {
       return isTranslationRunning || isAnalysisRunning || isWritingRunning;
+    }
+
+    function getActiveProvider() {
+      return document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+    }
+
+    function shouldUseOpenRouterResponseCache(baseUrl, provider) {
+      const normalizedBase = (baseUrl || '').toLowerCase();
+      return provider === 'openrouter' || normalizedBase.includes('openrouter.ai');
+    }
+
+    function getOpenRouterCacheHeaders(baseUrl, provider) {
+      if (!shouldUseOpenRouterResponseCache(baseUrl, provider)) return {};
+      return {
+        'X-OpenRouter-Cache': 'true',
+        'X-OpenRouter-Cache-TTL': '300'
+      };
+    }
+
+    function resetUsageStats() {
+      usageStats = { promptTokens: 0, completionTokens: 0, totalCost: 0 };
+    }
+
+    function recordUsageFromResponse(responseData) {
+      const usage = responseData?.usage;
+      if (!usage || typeof usage !== 'object') return;
+
+      const promptTokens = Number(usage.prompt_tokens || 0);
+      const completionTokens = Number(usage.completion_tokens || 0);
+      const cost = Number(usage.cost || 0);
+
+      if (Number.isFinite(promptTokens) && promptTokens > 0) {
+        usageStats.promptTokens += promptTokens;
+      }
+      if (Number.isFinite(completionTokens) && completionTokens > 0) {
+        usageStats.completionTokens += completionTokens;
+      }
+      if (Number.isFinite(cost) && cost > 0) {
+        usageStats.totalCost += cost;
+      }
     }
 
     async function requestWakeLock(contextLabel) {
@@ -71,6 +116,8 @@
           onModelSelectChange(config.defaultModel);
         }
       }
+      updateWritingCostEstimation();
+      applySpeedPreset(DEFAULT_SPEED_PRESET, { silent: true, animate: false });
     });
     document.addEventListener('visibilitychange', function handleVisibilityChange() {
       if (!hasActiveLongTask()) return;
@@ -249,9 +296,9 @@
       'mistralai/mistral-large-3-2512': { input: 0.50, output: 1.50 },
       'mistralai/mistral-small-creative': { input: 0.10, output: 0.30 },
       'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
-      // Estimated "fast" pricing placeholders (adjust if your OpenRouter bill differs)
-      'x-ai/grok-4.1-fast': { input: 0.30, output: 0.60 },
-      'x-ai/grok-4-fast': { input: 0.30, output: 0.60 },
+      // Fallback values; app will auto-refresh live OpenRouter pricing when available.
+      'x-ai/grok-4.1-fast': { input: 0.20, output: 0.50 },
+      'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
       // Hugging Face routing varies by provider/hardware; placeholder for estimation UI
       'dphn/Dolphin3.0-Qwen2.5-0.5B': { input: 0.01, output: 0.03 },
       'dphn/Dolphin3.0-Qwen2.5-1.5B': { input: 0.02, output: 0.05 },
@@ -265,6 +312,42 @@
       'mistralai/Mistral-Small-24B-Base-2501': { input: 0.10, output: 0.30 },
     };
 
+    async function ensureOpenRouterPricingLoaded() {
+      const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+      if (openRouterPricingMap && (Date.now() - openRouterPricingLoadedAt) < CACHE_TTL_MS) {
+        return openRouterPricingMap;
+      }
+
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/models');
+        if (!response.ok) return openRouterPricingMap;
+        const payload = await response.json();
+        const data = Array.isArray(payload?.data) ? payload.data : [];
+        const map = {};
+
+        data.forEach(function(modelInfo) {
+          const id = modelInfo?.id;
+          const promptPerToken = Number(modelInfo?.pricing?.prompt);
+          const completionPerToken = Number(modelInfo?.pricing?.completion);
+          if (!id || !Number.isFinite(promptPerToken) || !Number.isFinite(completionPerToken)) return;
+
+          map[id] = {
+            input: promptPerToken * 1000000,
+            output: completionPerToken * 1000000
+          };
+        });
+
+        if (Object.keys(map).length > 0) {
+          openRouterPricingMap = map;
+          openRouterPricingLoadedAt = Date.now();
+        }
+      } catch {
+        // Keep fallback static pricing if network fails.
+      }
+
+      return openRouterPricingMap;
+    }
+
     function getOptimalChunkSize(model) {
       const limit = MODEL_CONTEXT_LIMITS[model] || 32000;
       // Reserve generous room for prompt + output, use ~15% context for one chunk
@@ -274,6 +357,9 @@
     }
 
     function getModelPricing(model) {
+      if (openRouterPricingMap && openRouterPricingMap[model]) {
+        return openRouterPricingMap[model];
+      }
       return MODEL_PRICING[model] || { input: 0.10, output: 0.20 }; // conservative default
     }
 
@@ -304,6 +390,30 @@
       const estimatedInputTokens = estimateTokenCount((chunkText || '').length);
       const softCap = Math.ceil(estimatedInputTokens * 1.35 + 120);
       return Math.min(12000, Math.max(300, softCap));
+    }
+
+    function getTailContext(text, maxChars) {
+      if (!text) return '';
+      if (text.length <= maxChars) return text;
+
+      const sliceStart = text.length - maxChars;
+      const boundary = text.indexOf('\n\n', sliceStart);
+      if (boundary !== -1 && boundary < text.length - 200) {
+        return text.slice(boundary + 2);
+      }
+
+      return text.slice(sliceStart);
+    }
+
+    function getMaxTokensForWriting(systemPrompt, userPrompt) {
+      const modelName = getSelectedModel();
+      const contextLimit = MODEL_CONTEXT_LIMITS[modelName] || 32000;
+      const inputTokens = estimateTokenCount((systemPrompt || '').length + (userPrompt || '').length);
+      const reservedTokens = Math.max(500, Math.floor(contextLimit * 0.12));
+      const available = contextLimit - inputTokens - reservedTokens;
+      const dynamicCap = Math.floor(available * 0.9);
+
+      return Math.max(500, Math.min(3200, dynamicCap));
     }
 
     function extractAssistantText(responseData) {
@@ -337,6 +447,7 @@
     // Caching system using localStorage
     const CACHE_PREFIX = 'translator_cache_';
     const CACHE_VERSION = '1';
+    const STORY_ANALYSIS_CACHE_PREFIX = 'story_analysis_cache_v1:';
 
     function getCacheKey(chunkHash, model, provider) {
       return `${CACHE_PREFIX}${CACHE_VERSION}:${provider}:${model}:${chunkHash}`;
@@ -374,6 +485,44 @@
       }
     }
 
+    function getStoryAnalysisCacheKey(fileHash) {
+      if (!fileHash) return '';
+      return `${STORY_ANALYSIS_CACHE_PREFIX}${fileHash}`;
+    }
+
+    function getCachedStoryAnalysis(fileHash, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+      try {
+        const key = getStoryAnalysisCacheKey(fileHash);
+        if (!key) return null;
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed?.analysis || !parsed?.timestamp) return null;
+        if (Date.now() - parsed.timestamp > maxAgeMs) {
+          localStorage.removeItem(key);
+          return null;
+        }
+
+        return String(parsed.analysis);
+      } catch {
+        return null;
+      }
+    }
+
+    function setCachedStoryAnalysis(fileHash, analysis) {
+      try {
+        const key = getStoryAnalysisCacheKey(fileHash);
+        if (!key || !analysis) return;
+        localStorage.setItem(key, JSON.stringify({
+          analysis,
+          timestamp: Date.now()
+        }));
+      } catch {
+        // Ignore localStorage quota errors.
+      }
+    }
+
     function estimateTokenCount(chars) {
       // Approximate: Vietnamese ~2.5 chars per token, English ~4 chars per token
       // Mixed text: use 3 as average
@@ -398,20 +547,40 @@
       }
 
       const model = getSelectedModel();
-      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const provider = getActiveProvider();
       const chunkSize = Number.parseInt(document.getElementById('chunkSize').value, 10) || 6000;
-      const totalChunks = Math.ceil(fileContent.length / chunkSize);
+      const chunks = splitIntoChunks(fileContent, chunkSize);
+      const totalChunks = chunks.length;
+      const systemPrompt = document.getElementById('systemPrompt').value.trim();
 
-      // Estimate total input tokens
-      const totalInputTokens = estimateTokenCount(fileContent.length);
-      const totalOutputTokens = totalInputTokens; // Assume 1:1 ratio for translation
+      const promptOverheadChars = systemPrompt.length + 'Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n'.length;
+      const retryBufferFactor = 1.08;
+      const outputExpansionFactor = 1.10;
 
-      const inputCost = estimateCost(fileContent.length, model, true);
-      const outputCost = estimateCost(fileContent.length, model, false);
+      let estimatedInputChars = 0;
+      let estimatedOutputChars = 0;
+
+      chunks.forEach(function(chunk) {
+        estimatedInputChars += chunk.length + promptOverheadChars;
+        estimatedOutputChars += Math.ceil(chunk.length * outputExpansionFactor);
+      });
+
+      estimatedInputChars = Math.ceil(estimatedInputChars * retryBufferFactor);
+      estimatedOutputChars = Math.ceil(estimatedOutputChars * retryBufferFactor);
+
+      const totalInputTokens = estimateTokenCount(estimatedInputChars);
+      const totalOutputTokens = estimateTokenCount(estimatedOutputChars);
+
+      const inputCost = estimateCost(estimatedInputChars, model, true);
+      const outputCost = estimateCost(estimatedOutputChars, model, false);
       const totalCost = inputCost + outputCost;
 
       const pricing = getModelPricing(model);
       const hasLowPricing = pricing.input < 0.5 && pricing.output < 1.0;
+      const hasActualUsage = usageStats.promptTokens > 0 || usageStats.completionTokens > 0 || usageStats.totalCost > 0;
+      const actualCost = usageStats.totalCost > 0
+        ? usageStats.totalCost
+        : estimateCost(usageStats.promptTokens * 3, model, true) + estimateCost(usageStats.completionTokens * 3, model, false);
 
       costContent.innerHTML = `
         <div class="cost-item">
@@ -434,10 +603,84 @@
           <span class="cost-label">💰 Chi phí ước tính</span>
           <span class="cost-value highlight">$${totalCost.toFixed(4)} USD</span>
         </div>
+        ${hasActualUsage ? `
+        <div class="cost-item">
+          <span class="cost-label">🧾 Token thực tế (đã chạy)</span>
+          <span class="cost-value">${Math.round(usageStats.promptTokens).toLocaleString('vi-VN')} in · ${Math.round(usageStats.completionTokens).toLocaleString('vi-VN')} out</span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">💳 Chi phí thực tế (đã chạy)</span>
+          <span class="cost-value highlight">$${actualCost.toFixed(4)} USD</span>
+        </div>
+        ` : ''}
         ${hasLowPricing ? `<div class="cost-note">✅ Model này có mức giá thấp, phù hợp dịch lớn</div>` : ''}
       `;
 
       costCard.style.display = 'block';
+    }
+
+    function updateWritingCostEstimation() {
+      const estimateEl = document.getElementById('writingCostEstimate');
+      if (!estimateEl) return;
+
+      if (!fileContent) {
+        estimateEl.innerHTML = '⏳ Tải file để xem ước tính token viết tiếp.';
+        return;
+      }
+
+      const model = getSelectedModel();
+      const provider = getActiveProvider();
+      const chunkCount = Number.parseInt(document.getElementById('writingChunkCount')?.value, 10) || 1;
+      const safeChunkCount = Math.max(1, Math.min(100, chunkCount));
+      const plotDirection = document.getElementById('plotDirection')?.value?.trim() || '';
+      const isAnalysisEnabled = Boolean(document.getElementById('enableAnalysis')?.checked);
+      const budgets = getWritingContextBudgets(model);
+      const { styleSample, lastChapter } = extractWritingContext(fileContent, budgets);
+
+      const estimatedAnalysisChars = isAnalysisEnabled
+        ? (cachedStoryAnalysis ? cachedStoryAnalysis.length : 4000)
+        : 0;
+      const baseSystemPrompt = buildContinueWritingSystemPrompt(styleSample, null);
+      const syntheticSystemPrompt = baseSystemPrompt + (estimatedAnalysisChars > 0 ? `\n${'x'.repeat(Math.min(estimatedAnalysisChars, 12000))}` : '');
+      const firstUserPrompt = buildContinueWritingUserPrompt(lastChapter, plotDirection, '', 0);
+
+      const inputPerChunk = estimateTokenCount(syntheticSystemPrompt.length + firstUserPrompt.length);
+      const tailCarryPerChunk = estimateTokenCount(budgets.previousTailLength);
+      const estimatedTotalInput = inputPerChunk * safeChunkCount + Math.max(0, safeChunkCount - 1) * tailCarryPerChunk;
+
+      const maxTokensPerChunk = getMaxTokensForWriting(syntheticSystemPrompt, firstUserPrompt);
+      const estimatedTotalOutput = maxTokensPerChunk * safeChunkCount;
+
+      let analysisInputTokens = 0;
+      let analysisOutputTokens = 0;
+      if (isAnalysisEnabled && !cachedStoryAnalysis) {
+        const analysisWindowChars = Math.min(fileContent.length, 60000);
+        const analysisChunkCount = Math.ceil(analysisWindowChars / 6000);
+        analysisInputTokens = estimateTokenCount(
+          analysisWindowChars +
+          analysisChunkCount * 900 +
+          Math.floor(analysisWindowChars * 0.3)
+        );
+        analysisOutputTokens = Math.ceil(analysisInputTokens * 0.2);
+      }
+
+      const totalInputTokens = estimatedTotalInput + analysisInputTokens;
+      const totalOutputTokens = estimatedTotalOutput + analysisOutputTokens;
+      const totalInputChars = totalInputTokens * 3;
+      const totalOutputChars = totalOutputTokens * 3;
+      const inputCost = estimateCost(totalInputChars, model, true);
+      const outputCost = estimateCost(totalOutputChars, model, false);
+      const totalCost = inputCost + outputCost;
+      const providerLabel = provider === 'openrouter' ? 'OpenRouter' : provider;
+      const analysisLabel = isAnalysisEnabled
+        ? (cachedStoryAnalysis ? 'bật (dùng cache)' : 'bật (ước tính có gọi phân tích)')
+        : 'tắt';
+
+      estimateEl.innerHTML = `
+        💡 Viết tiếp (${safeChunkCount} đoạn) · model ${model}<br>
+        Ước tính token: vào ~${totalInputTokens.toLocaleString('vi-VN')} · ra ~${totalOutputTokens.toLocaleString('vi-VN')} · trần mỗi đoạn ~${maxTokensPerChunk.toLocaleString('vi-VN')}<br>
+        Ước tính chi phí: <strong>~$${totalCost.toFixed(4)}</strong> (in $${inputCost.toFixed(4)} + out $${outputCost.toFixed(4)}) · provider ${providerLabel} · phân tích ${analysisLabel}
+      `;
     }
 
     function buildModelDropdown(provider) {
@@ -473,6 +716,12 @@
       const activeProvider = document.querySelector('.tab.active')?.dataset?.provider;
       if (activeProvider === 'openrouter') {
         buildModelDropdown('openrouter');
+        ensureOpenRouterPricingLoaded().then(function() {
+          if (fileContent) {
+            updateCostEstimation();
+            updateWritingCostEstimation();
+          }
+        });
       }
     }
 
@@ -485,6 +734,7 @@
       // Update cost estimation when model changes
       if (fileContent) {
         updateCostEstimation();
+        updateWritingCostEstimation();
       }
     }
 
@@ -505,6 +755,15 @@
       buildModelDropdown(provider);
       loadSavedApiKey(provider);
 
+      if (provider === 'openrouter') {
+        ensureOpenRouterPricingLoaded().then(function() {
+          if (fileContent) {
+            updateCostEstimation();
+            updateWritingCostEstimation();
+          }
+        });
+      }
+
       document.querySelectorAll('.tab').forEach(function(tab) {
         tab.classList.toggle('active', tab.dataset.provider === provider);
       });
@@ -512,6 +771,7 @@
       // Update cost estimation when provider changes
       if (fileContent) {
         updateCostEstimation();
+        updateWritingCostEstimation();
       }
     }
 
@@ -524,7 +784,7 @@
     }
 
     function saveApiKey() {
-      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const provider = getActiveProvider();
       const apiKey = document.getElementById('apiKey').value.trim();
       if (!apiKey) return;
       localStorage.setItem('translator_api_key_' + provider, apiKey);
@@ -569,11 +829,13 @@
       selectedFile = file;
       originalFileName = file.name;
       cachedStoryAnalysis = null;
+      currentFileHash = '';
+      resetUsageStats();
       const cacheHint = document.getElementById('analysisCacheHint');
       if (cacheHint) cacheHint.style.display = 'none';
 
       const reader = new FileReader();
-      reader.onload = function(event) {
+      reader.onload = async function(event) {
         fileContent = event.target.result;
 
         const sizeMB = (file.size / 1024 / 1024).toFixed(2);
@@ -594,6 +856,24 @@
 
         // Update cost estimation
         updateCostEstimation();
+        updateWritingCostEstimation();
+
+        try {
+          currentFileHash = await hashContent(fileContent);
+        } catch {
+          currentFileHash = '';
+        }
+
+        const persistedAnalysis = getCachedStoryAnalysis(currentFileHash);
+        if (persistedAnalysis) {
+          cachedStoryAnalysis = persistedAnalysis;
+          if (cacheHint) {
+            cacheHint.textContent = ' ✅ Đã có bản phân tích cache (sẽ dùng lại)';
+            cacheHint.style.display = 'inline';
+          }
+        }
+
+        updateWritingCostEstimation();
       };
       reader.readAsText(file, 'UTF-8');
     }
@@ -689,7 +969,7 @@
     async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null) {
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
-      const provider = document.querySelector('.tab.active')?.dataset?.provider || 'openrouter';
+      const provider = getActiveProvider();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const systemPrompt = document.getElementById('systemPrompt').value.trim();
       const temperature = Number.parseFloat(document.getElementById('temperature').value);
@@ -703,7 +983,8 @@
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
+              'Authorization': `Bearer ${apiKey}`,
+              ...getOpenRouterCacheHeaders(baseUrl, provider)
             },
             body: JSON.stringify({
               model: modelName,
@@ -718,12 +999,27 @@
 
           if (!response.ok) {
             const errorBody = await response.text();
+            try {
+              const parsed = JSON.parse(errorBody);
+              const code = parsed?.error?.code;
+              if (code === 'model_not_supported') {
+                const modelLabel = getSelectedModel();
+                throw new Error(`Model "${modelLabel}" không hỗ trợ chat/completions trên Hugging Face Router. Hãy chọn model khác trong danh sách.`);
+              }
+              if (code === 'model_not_found') {
+                const modelLabel = getSelectedModel();
+                throw new Error(`Model "${modelLabel}" không tồn tại hoặc không khả dụng với provider hiện tại.`);
+              }
+            } catch {
+              // Ignore parse issues and use raw error below.
+            }
             const error = new Error(`HTTP ${response.status}: ${errorBody}`);
             error.status = response.status;
             throw error;
           }
 
           const responseData = await response.json();
+          recordUsageFromResponse(responseData);
           const translatedText = normalizeTranslatedText(extractAssistantText(responseData));
 
           if (!translatedText) {
@@ -940,8 +1236,6 @@
       document.getElementById('downloadPartialCount').textContent = doneCount;
       if (doneCount > 0) {
         partialBtn.disabled = false;
-        partialBtn.style.opacity = '1';
-        partialBtn.style.cursor = 'pointer';
       }
 
       if (startTime && completedChunks > 0) {
@@ -990,6 +1284,7 @@
       hideError();
       isStopped = false;
       isTranslationRunning = true;
+      resetUsageStats();
       requestWakeLock('start-translation');
       startTime = Date.now();
       completedChunks = 0;
@@ -1012,6 +1307,7 @@
       document.getElementById('stopBtn').style.display = 'flex';
       document.getElementById('progressLabel').textContent = 'Đang dịch...';
       document.getElementById('logContainer').innerHTML = '';
+      document.getElementById('progressSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       addLog(`Bắt đầu dịch: ${totalChunks} đoạn · ${concurrentRequests} luồng song song`, 'accent');
       addLog(`Model: ${modelName} @ ${baseUrl}`, 'info');
@@ -1044,6 +1340,7 @@
         } finally {
           isTranslationRunning = false;
           releaseWakeLockIfIdle();
+          updateCostEstimation();
           document.getElementById('startBtn').disabled = false;
           document.getElementById('stopBtn').style.display = 'none';
           document.title = 'Trình Dịch Truyện AI';
@@ -1058,20 +1355,50 @@
       }
     }
 
-    function applySpeedPreset(preset) {
-      const presets = {
-        turbo:    { concurrent: 20, delay: 0,    chunkSize: 8000, temperature: 0.3 },
-        balanced: { concurrent: 10, delay: 200,  chunkSize: 6000, temperature: 0.3 },
-        safe:     { concurrent: 3,  delay: 1000, chunkSize: 5000, temperature: 0.2 },
-        economy:  { concurrent: 2,  delay: 2000, chunkSize: 6000, temperature: 0.2 },
-      };
-      const settings = presets[preset];
+    const SPEED_PRESETS = {
+      turbo:    { concurrent: 20, delay: 0,    chunkSize: 8000, temperature: 0.3 },
+      balanced: { concurrent: 10, delay: 100,  chunkSize: 6000, temperature: 0.3 },
+      safe:     { concurrent: 4,  delay: 600,  chunkSize: 5000, temperature: 0.2 },
+      economy:  { concurrent: 2,  delay: 1200, chunkSize: 6000, temperature: 0.2 },
+    };
+    const DEFAULT_SPEED_PRESET = 'balanced';
+
+    function markActiveSpeedPreset(preset, animate) {
+      const buttons = document.querySelectorAll('.speed-preset-btn[data-speed-preset]');
+      buttons.forEach(function(button) {
+        const isActive = button.dataset.speedPreset === preset;
+        button.classList.toggle('active', isActive);
+        if (isActive && animate) {
+          button.classList.remove('is-applying');
+          requestAnimationFrame(function() {
+            button.classList.add('is-applying');
+            setTimeout(function() { button.classList.remove('is-applying'); }, 460);
+          });
+        } else {
+          button.classList.remove('is-applying');
+        }
+      });
+    }
+
+    function clearSpeedPresetHighlight() {
+      const buttons = document.querySelectorAll('.speed-preset-btn[data-speed-preset]');
+      buttons.forEach(function(button) {
+        button.classList.remove('active', 'is-applying');
+      });
+    }
+
+    function applySpeedPreset(preset, options) {
+      const opts = options || {};
+      const silent = Boolean(opts.silent);
+      const animate = opts.animate !== false;
+      const settings = SPEED_PRESETS[preset];
       if (!settings) return;
       document.getElementById('concurrentRequests').value = settings.concurrent;
       document.getElementById('delayBetweenChunks').value = settings.delay;
       document.getElementById('temperature').value = settings.temperature;
       document.getElementById('tempDisplay').textContent = settings.temperature;
       document.getElementById('tempValue').textContent = settings.temperature;
+      markActiveSpeedPreset(preset, animate);
       if (!isStopped && completedChunks === 0) {
         // Auto-adjust chunk size based on model if economy preset
         if (preset === 'economy') {
@@ -1082,7 +1409,9 @@
           document.getElementById('chunkSize').value = settings.chunkSize;
         }
       }
-      addLog(`⚡ Preset "${preset}": ${settings.concurrent} song song · ${settings.delay}ms delay · temp ${settings.temperature}${completedChunks === 0 ? ` · chunk ${document.getElementById('chunkSize').value}` : ' (chunk size giữ nguyên vì đang dịch)'}`, 'accent');
+      if (!silent) {
+        addLog(`⚡ Preset "${preset}": ${settings.concurrent} song song · ${settings.delay}ms delay · temp ${settings.temperature}${completedChunks === 0 ? ` · chunk ${document.getElementById('chunkSize').value}` : ' (chunk size giữ nguyên vì đang dịch)'}`, 'accent');
+      }
     }
 
     function stopTranslation() {
@@ -1101,6 +1430,7 @@
         `Dịch hoàn tất ${totalChunks} đoạn trong ${elapsed} · ${charCount} ký tự`;
 
       renderResultPreview();
+      updateCostEstimation();
 
       document.getElementById('resultSection').classList.add('visible');
       document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1283,8 +1613,6 @@ ${chunks.filter(Boolean).map(function(chunk) {
       document.getElementById('logContainer').innerHTML = '';
       const partialBtn = document.getElementById('downloadPartialBtn');
       partialBtn.disabled = true;
-      partialBtn.style.opacity = '0.5';
-      partialBtn.style.cursor = 'not-allowed';
       document.getElementById('downloadPartialCount').textContent = '0';
       hideError();
     }
@@ -1311,6 +1639,7 @@ ${chunks.filter(Boolean).map(function(chunk) {
     document.getElementById('temperature').addEventListener('input', function() {
       document.getElementById('tempValue').textContent = this.value;
       document.getElementById('tempDisplay').textContent = this.value;
+      clearSpeedPresetHighlight();
     });
 
     let lastKnownConcurrency = getRuntimeConcurrentRequests();
@@ -1319,6 +1648,7 @@ ${chunks.filter(Boolean).map(function(chunk) {
       if (currentConcurrency === lastKnownConcurrency) return;
 
       lastKnownConcurrency = currentConcurrency;
+      clearSpeedPresetHighlight();
 
       if (isTranslationRunning) {
         addLog(`⚙️ Áp dụng ngay: ${currentConcurrency} request song song (request đang chạy sẽ hoàn tất trước).`, 'accent');
@@ -1334,6 +1664,16 @@ ${chunks.filter(Boolean).map(function(chunk) {
     }
     document.getElementById('concurrentRequests').addEventListener('input', onConcurrentRequestsChanged);
     document.getElementById('concurrentRequests').addEventListener('change', onConcurrentRequestsChanged);
+    document.getElementById('delayBetweenChunks').addEventListener('input', clearSpeedPresetHighlight);
+    document.getElementById('modelName').addEventListener('input', function() {
+      if (fileContent) {
+        updateCostEstimation();
+        updateWritingCostEstimation();
+      }
+    });
+    document.getElementById('writingChunkCount').addEventListener('input', updateWritingCostEstimation);
+    document.getElementById('plotDirection').addEventListener('input', updateWritingCostEstimation);
+    document.getElementById('enableAnalysis').addEventListener('change', updateWritingCostEstimation);
 
 
     /* ===== Continue Writing Feature ===== */
@@ -1342,9 +1682,21 @@ ${chunks.filter(Boolean).map(function(chunk) {
     let continuedChunks = [];
     let cachedStoryAnalysis = null;
 
-    function extractWritingContext(text) {
-      const SAMPLE_SIZE = 5000;
-      const LAST_CHAPTER_LENGTH = 30000;
+    function getWritingContextBudgets(modelName) {
+      const contextLimit = MODEL_CONTEXT_LIMITS[modelName] || 32000;
+
+      if (contextLimit <= 32768) {
+        return { sampleSize: 1200, lastChapterLength: 4500, previousTailLength: 1200 };
+      }
+      if (contextLimit <= 64000) {
+        return { sampleSize: 1800, lastChapterLength: 7000, previousTailLength: 2000 };
+      }
+      return { sampleSize: 2500, lastChapterLength: 10000, previousTailLength: 3500 };
+    }
+
+    function extractWritingContext(text, budgets) {
+      const SAMPLE_SIZE = budgets?.sampleSize || 2500;
+      const LAST_CHAPTER_LENGTH = budgets?.lastChapterLength || 10000;
 
       // Lấy 3 mẫu văn phong: đầu, giữa, cuối
       const beginSample = text.slice(0, Math.min(SAMPLE_SIZE, text.length));
@@ -1361,7 +1713,7 @@ ${chunks.filter(Boolean).map(function(chunk) {
         styleSample += `\n\n[GẦN CUỐI TRUYỆN]\n${nearEndSample}`;
       }
 
-      // Lấy 30K ký tự cuối để AI có đủ context gần nhất
+      // Chỉ giữ cửa sổ ngữ cảnh gần cuối để giảm token lặp.
       const lastChapter = text.length > LAST_CHAPTER_LENGTH
         ? text.slice(-LAST_CHAPTER_LENGTH)
         : text;
@@ -1598,11 +1950,11 @@ Hãy sử dụng bản phân tích trên để:
       return prompt;
     }
 
-    function buildContinueWritingUserPrompt(lastChapter, plotDirection, previouslyWritten) {
+    function buildContinueWritingUserPrompt(lastChapter, plotDirection, previousTail, writtenChunkCount) {
       let prompt = `Đây là đoạn cuối cùng của truyện:\n\n=== ĐOẠN CUỐI ===\n${lastChapter}\n=== HẾT ===\n\n`;
 
-      if (previouslyWritten) {
-        prompt += `Đây là phần bạn đã viết tiếp trước đó (TIẾP TỤC từ đây, KHÔNG lặp lại):\n\n=== ĐÃ VIẾT ===\n${previouslyWritten}\n=== HẾT PHẦN ĐÃ VIẾT ===\n\n`;
+      if (previousTail) {
+        prompt += `Đây là phần đuôi bạn đã viết tiếp trước đó (${writtenChunkCount} đoạn trước, chỉ đưa phần gần nhất để tránh lặp):\n\n=== ĐUÔI PHẦN ĐÃ VIẾT ===\n${previousTail}\n=== HẾT ĐUÔI ===\n\n`;
       }
 
       prompt += `Hãy viết tiếp khoảng 1500 từ, giữ ĐÚNG giọng văn và nhịp truyện của tác giả.`;
@@ -1624,8 +1976,10 @@ Hãy sử dụng bản phân tích trên để:
     async function callWritingApi(systemPrompt, userPrompt) {
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
+      const provider = getActiveProvider();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const temperature = Number.parseFloat(document.getElementById('writingTemperature').value);
+      const maxTokens = getMaxTokensForWriting(systemPrompt, userPrompt);
       const url = `${baseUrl}/chat/completions`;
       const MAX_RETRIES = 2;
 
@@ -1635,11 +1989,13 @@ Hãy sử dụng bản phân tích trên để:
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
+              'Authorization': `Bearer ${apiKey}`,
+              ...getOpenRouterCacheHeaders(baseUrl, provider)
             },
             body: JSON.stringify({
               model: modelName,
               temperature: temperature,
+              max_tokens: maxTokens,
               messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
@@ -1649,6 +2005,15 @@ Hãy sử dụng bản phân tích trên để:
 
           if (!response.ok) {
             const errorBody = await response.text();
+            try {
+              const parsed = JSON.parse(errorBody);
+              const code = parsed?.error?.code;
+              if (code === 'model_not_supported') {
+                throw new Error('Model hiện tại không hỗ trợ chat/completions. Hãy đổi model khác trong dropdown.');
+              }
+            } catch {
+              // Keep fallback error below.
+            }
             throw new Error(`HTTP ${response.status}: ${errorBody}`);
           }
 
@@ -1664,6 +2029,7 @@ Hãy sử dụng bản phân tích trên để:
           } catch (parseError) {
             throw new Error('JSON parse lỗi — response có thể bị cắt ngắn (timeout). Thử lại...');
           }
+          recordUsageFromResponse(responseData);
 
           const generatedText = responseData.choices?.[0]?.message?.content;
 
@@ -1709,8 +2075,9 @@ Hãy sử dụng bản phân tích trên để:
 
       const chunkCount = Number.parseInt(document.getElementById('writingChunkCount').value, 10);
       const plotDirection = document.getElementById('plotDirection').value.trim();
+      const writingBudgets = getWritingContextBudgets(modelName);
 
-      const { styleSample, lastChapter } = extractWritingContext(fileContent);
+      const { styleSample, lastChapter } = extractWritingContext(fileContent, writingBudgets);
 
       // UI setup
       document.getElementById('writingResultSection').classList.add('visible');
@@ -1721,15 +2088,23 @@ Hãy sử dụng bản phân tích trên để:
       document.getElementById('writingChunkIndicator').style.display = 'inline-flex';
       const partialWritingBtn = document.getElementById('downloadWritingPartialBtn');
       partialWritingBtn.disabled = true;
-      partialWritingBtn.style.opacity = '0.5';
-      partialWritingBtn.style.cursor = 'not-allowed';
       document.getElementById('writingPartialCount').textContent = '0';
+      setWritingOutputCollapsed(true);
 
       document.getElementById('writingResultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       // Phase 1: Story Analysis (if enabled)
       const isAnalysisEnabled = document.getElementById('enableAnalysis').checked;
       let storyAnalysis = null;
+      const persistedAnalysis = (!cachedStoryAnalysis && currentFileHash)
+        ? getCachedStoryAnalysis(currentFileHash)
+        : null;
+      if (persistedAnalysis) {
+        cachedStoryAnalysis = persistedAnalysis;
+        document.getElementById('analysisCacheHint').textContent = ' ✅ Đã có bản phân tích cache (sẽ dùng lại)';
+        document.getElementById('analysisCacheHint').style.display = 'inline';
+        updateWritingCostEstimation();
+      }
 
       if (isAnalysisEnabled) {
         if (cachedStoryAnalysis) {
@@ -1757,7 +2132,11 @@ Hãy sử dụng bản phân tích trên để:
             }
 
             cachedStoryAnalysis = storyAnalysis;
+            if (currentFileHash) {
+              setCachedStoryAnalysis(currentFileHash, storyAnalysis);
+            }
             document.getElementById('analysisCacheHint').style.display = 'inline';
+            updateWritingCostEstimation();
             document.getElementById('writingOutput').textContent += '\n✅ Phân tích hoàn tất! Bắt đầu viết...\n\n';
 
           } catch (analysisError) {
@@ -1780,10 +2159,12 @@ Hãy sử dụng bản phân tích trên để:
           `Đang viết đoạn ${chunkIndex + 1}/${chunkCount}...`;
 
         try {
+          const previousTail = getTailContext(accumulatedText, writingBudgets.previousTailLength);
           const userPrompt = buildContinueWritingUserPrompt(
             lastChapter,
             plotDirection,
-            accumulatedText
+            previousTail,
+            continuedChunks.length
           );
 
           const generatedText = await callWritingApi(systemPrompt, userPrompt);
@@ -1800,8 +2181,6 @@ Hãy sử dụng bản phân tích trên để:
           document.getElementById('writingPartialCount').textContent = continuedChunks.length;
           const partialBtn = document.getElementById('downloadWritingPartialBtn');
           partialBtn.disabled = false;
-          partialBtn.style.opacity = '1';
-          partialBtn.style.cursor = 'pointer';
 
           // Auto-scroll output to bottom
           const outputEl = document.getElementById('writingOutput');
@@ -1911,6 +2290,20 @@ Hãy sử dụng bản phân tích trên để:
       outputEl.scrollTop = outputEl.scrollHeight;
     }
 
+    function setWritingOutputCollapsed(collapsed) {
+      isWritingOutputCollapsed = Boolean(collapsed);
+      const outputEl = document.getElementById('writingOutput');
+      const toggleBtn = document.getElementById('toggleWritingOutputBtn');
+      if (!outputEl || !toggleBtn) return;
+
+      outputEl.classList.toggle('is-collapsed', isWritingOutputCollapsed);
+      toggleBtn.textContent = isWritingOutputCollapsed ? 'Mở nội dung' : 'Thu gọn nội dung';
+    }
+
+    function toggleWritingOutput() {
+      setWritingOutputCollapsed(!isWritingOutputCollapsed);
+    }
+
     async function improveChunk(chunkIdx) {
       const originalText = continuedChunks[chunkIdx];
       if (!originalText) return;
@@ -1918,7 +2311,9 @@ Hãy sử dụng bản phân tích trên để:
       const block = document.getElementById('chunk-block-' + chunkIdx);
       if (block) block.classList.add('is-processing');
 
-      const { styleSample } = extractWritingContext(fileContent);
+      const modelName = getSelectedModel();
+      const writingBudgets = getWritingContextBudgets(modelName);
+      const { styleSample } = extractWritingContext(fileContent, writingBudgets);
 
       const systemPrompt = `Bạn là biên tập viên. Nhiệm vụ: cải thiện đoạn văn dưới đây để GIỐNG giọng văn mẫu hơn.
 
@@ -1952,14 +2347,17 @@ ${originalText}`;
       const block = document.getElementById('chunk-block-' + chunkIdx);
       if (block) block.classList.add('is-processing');
 
-      const { styleSample, lastChapter } = extractWritingContext(fileContent);
+      const modelName = getSelectedModel();
+      const writingBudgets = getWritingContextBudgets(modelName);
+      const { styleSample, lastChapter } = extractWritingContext(fileContent, writingBudgets);
       const plotDirection = document.getElementById('plotDirection').value.trim();
       const storyAnalysis = cachedStoryAnalysis;
       const systemPrompt = buildContinueWritingSystemPrompt(styleSample, storyAnalysis);
 
       // Build accumulated text from chunks BEFORE this one
       const previousText = continuedChunks.slice(0, chunkIdx).join('\n\n');
-      const userPrompt = buildContinueWritingUserPrompt(lastChapter, plotDirection, previousText);
+      const previousTail = getTailContext(previousText, writingBudgets.previousTailLength);
+      const userPrompt = buildContinueWritingUserPrompt(lastChapter, plotDirection, previousTail, chunkIdx);
 
       try {
         const rewritten = await callWritingApi(systemPrompt, userPrompt);

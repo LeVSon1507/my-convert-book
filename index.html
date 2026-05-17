@@ -121,7 +121,7 @@
         </div>
         <div class="form-group">
           <label for="concurrentRequests">Số yêu cầu song song</label>
-          <input type="number" id="concurrentRequests" value="3" min="1" max="50" step="1" />
+          <input type="number" id="concurrentRequests" value="10" min="1" max="50" step="1" />
         </div>
       </div>
 
@@ -135,23 +135,23 @@
 
       <div class="form-group">
         <label for="delayBetweenChunks">Độ trễ giữa các đoạn (ms)</label>
-        <input type="number" id="delayBetweenChunks" value="500" min="0" max="5000" step="100" />
+        <input type="number" id="delayBetweenChunks" value="100" min="0" max="5000" step="100" />
       </div>
 
        <div class="form-group">
          <label>⚡ Preset tốc độ <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(áp dụng ngay kể cả khi đang dịch)</span></label>
          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-           <button class="btn btn-secondary" onclick="applySpeedPreset('turbo')" style="flex:1;padding:8px 12px;font-size:13px;">
+           <button class="btn btn-secondary speed-preset-btn" data-speed-preset="turbo" onclick="applySpeedPreset('turbo')" style="flex:1;padding:8px 12px;font-size:13px;">
              🚀 Turbo <span style="font-size:11px;color:var(--text-muted);">20 song song · 0ms</span>
            </button>
-           <button class="btn btn-secondary" onclick="applySpeedPreset('balanced')" style="flex:1;padding:8px 12px;font-size:13px;">
-             ⚖️ Cân bằng <span style="font-size:11px;color:var(--text-muted);">10 song song · 200ms</span>
+           <button class="btn btn-secondary speed-preset-btn" data-speed-preset="balanced" onclick="applySpeedPreset('balanced')" style="flex:1;padding:8px 12px;font-size:13px;">
+             ⚖️ Cân bằng <span style="font-size:11px;color:var(--text-muted);">10 song song · 100ms</span>
            </button>
-           <button class="btn btn-secondary" onclick="applySpeedPreset('safe')" style="flex:1;padding:8px 12px;font-size:13px;">
-             🛡️ An toàn <span style="font-size:11px;color:var(--text-muted);">3 song song · 1000ms</span>
+           <button class="btn btn-secondary speed-preset-btn" data-speed-preset="safe" onclick="applySpeedPreset('safe')" style="flex:1;padding:8px 12px;font-size:13px;">
+             🛡️ An toàn <span style="font-size:11px;color:var(--text-muted);">4 song song · 600ms</span>
            </button>
-           <button class="btn btn-secondary" onclick="applySpeedPreset('economy')" style="flex:1;padding:8px 12px;font-size:13px;border-color:var(--success);color:var(--success);">
-             💰 Tiết kiệm <span style="font-size:11px;color:var(--text-muted);">2 song song · 2000ms</span>
+           <button class="btn btn-secondary speed-preset-btn" data-speed-preset="economy" onclick="applySpeedPreset('economy')" style="flex:1;padding:8px 12px;font-size:13px;">
+             💰 Tiết kiệm <span style="font-size:11px;color:var(--text-muted);">2 song song · 1200ms</span>
            </button>
          </div>
        </div>
@@ -213,6 +213,10 @@
         </div>
       </div>
 
+      <div class="cost-note" id="writingCostEstimate" style="margin-top:10px;">
+        ⏳ Tải file để xem ước tính token viết tiếp.
+      </div>
+
       <div class="button-row" style="margin-top:12px;">
         <button class="btn btn-writing btn-lg" id="startWritingBtn" onclick="startContinueWriting()">
           <span>✍️</span> Viết tiếp từ chương cuối
@@ -226,29 +230,34 @@
     <!-- Writing Result Section -->
     <div class="writing-section" id="writingResultSection" style="margin-top: 20px;">
       <div class="card">
-        <div class="card-title"><span class="icon">📝</span> Nội dung viết tiếp</div>
+        <div class="writing-result-header">
+          <div class="card-title" style="margin-bottom:0;"><span class="icon">📝</span> Nội dung viết tiếp</div>
+          <button class="btn btn-secondary btn-sm" id="toggleWritingOutputBtn" onclick="toggleWritingOutput()">
+            Mở nội dung
+          </button>
+        </div>
 
         <div id="writingChunkIndicator" class="writing-chunk-indicator" style="display:none;">
           <div class="spinner" style="width:12px;height:12px;border-width:1.5px;"></div>
           <span id="writingChunkLabel">Đang viết đoạn 1/3...</span>
         </div>
 
-        <div class="writing-output" id="writingOutput"></div>
+        <div class="writing-output is-collapsed" id="writingOutput"></div>
 
         <div style="margin-top:12px;">
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div class="format-row">
             <span style="font-size:12px; color:var(--text-muted); font-weight:500;">Định dạng:</span>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="writingPartialFormat" value="txt" checked /> TXT
             </label>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="writingPartialFormat" value="docx" /> DOCX
             </label>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="writingPartialFormat" value="epub" /> EPUB
             </label>
           </div>
-          <button class="btn btn-secondary" id="downloadWritingPartialBtn" onclick="downloadWritingPartial()" style="width:100%; opacity:0.5; cursor:not-allowed;" disabled>
+          <button class="btn btn-secondary btn-full" id="downloadWritingPartialBtn" onclick="downloadWritingPartial()" disabled>
             <span>⬇️</span> Tải xuống đoạn đã viết (<span id="writingPartialCount">0</span> đoạn)
           </button>
         </div>
@@ -256,16 +265,16 @@
         <div style="margin-top:16px;">
           <div class="form-group">
             <label>Định dạng xuất file</label>
-            <div style="display:flex; gap:16px; flex-wrap:wrap;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+            <div class="format-row format-row-lg">
+              <label class="format-option">
                 <input type="radio" name="writingExportFormat" value="txt" checked />
                 <span>📄 TXT</span>
               </label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+              <label class="format-option">
                 <input type="radio" name="writingExportFormat" value="docx" />
                 <span>📝 DOCX</span>
               </label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+              <label class="format-option">
                 <input type="radio" name="writingExportFormat" value="epub" />
                 <span>📚 EPUB</span>
               </label>
@@ -319,19 +328,19 @@
         <div class="log-container" id="logContainer"></div>
 
         <div style="margin-top: 12px;">
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <div class="format-row">
             <span style="font-size:12px; color:var(--text-muted); font-weight:500;">Định dạng:</span>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="partialFormat" value="txt" checked /> TXT
             </label>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="partialFormat" value="docx" /> DOCX
             </label>
-            <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+            <label class="format-option format-option-sm">
               <input type="radio" name="partialFormat" value="epub" /> EPUB
             </label>
           </div>
-          <button class="btn btn-secondary" id="downloadPartialBtn" onclick="downloadPartial()" style="width:100%; opacity:0.5; cursor:not-allowed;" disabled>
+          <button class="btn btn-secondary btn-full" id="downloadPartialBtn" onclick="downloadPartial()" disabled>
             <span>⬇️</span> Tải xuống các đoạn đã dịch (<span id="downloadPartialCount">0</span> đoạn)
           </button>
         </div>
@@ -360,16 +369,16 @@
 
         <div class="form-group">
           <label>Định dạng xuất file</label>
-          <div style="display:flex; gap:16px; flex-wrap:wrap;">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+          <div class="format-row format-row-lg">
+            <label class="format-option">
               <input type="radio" name="exportFormat" value="txt" checked />
               <span>📄 TXT</span> <span style="font-size:11px;color:var(--text-muted);">— đơn giản, nhẹ</span>
             </label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+            <label class="format-option">
               <input type="radio" name="exportFormat" value="docx" />
               <span>📝 DOCX</span> <span style="font-size:11px;color:var(--text-muted);">— Word, có định dạng</span>
             </label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;">
+            <label class="format-option">
               <input type="radio" name="exportFormat" value="epub" />
               <span>📚 EPUB</span> <span style="font-size:11px;color:var(--text-muted);">— ebook, đọc trên Kindle/Phone</span>
             </label>
