@@ -1165,6 +1165,7 @@
     async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null, glossaryInstruction = '') {
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
+      const provider = getActiveProvider();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const baseSystemPrompt = document.getElementById('systemPrompt').value.trim();
       const systemPrompt = `${baseSystemPrompt}${glossaryInstruction || ''}`;
