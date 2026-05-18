@@ -15,6 +15,7 @@ Thumbs.db
 
 # Node (if any)
 node_modules/
+dist/
 
 # Local runtime config (contains private API keys)
-config.local.js
+config/config.local.js
