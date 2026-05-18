@@ -121,11 +121,19 @@
       <div data-mode-section="translate">
         <!-- Step 1: API Config -->
         <div class="card" id="apiCard">
-          <div class="card-title">
-            <span class="icon">🔑</span> Cấu hình API
+          <div class="card-title api-config-header">
+            <span><span class="icon">🔑</span> Cấu hình API</span>
+            <button
+              type="button"
+              class="api-collapse-btn"
+              id="providerTabsToggleBtn"
+              onclick="toggleProviderTabsCollapse()"
+            >
+              Thu gọn tab
+            </button>
           </div>
 
-          <div class="tabs" id="providerTabs">
+          <div class="tabs provider-tabs" id="providerTabs">
             <button
               class="tab active"
               data-provider="grok"
@@ -161,9 +169,16 @@
             >
               Hugging Face
             </button>
+            <button
+              class="tab"
+              data-provider="ollama"
+              onclick="switchProvider('ollama')"
+            >
+              Ollama Local
+            </button>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" id="apiKeyGroup">
             <label for="apiKey">API Key</label>
             <div class="password-wrapper">
               <input
@@ -339,7 +354,7 @@ Bạn là dịch giả văn học.
                 id="concurrentRequests"
                 value="10"
                 min="1"
-                max="50"
+                max="200"
                 step="1"
               />
             </div>

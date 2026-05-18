@@ -299,6 +299,7 @@ Hãy sử dụng bản phân tích trên để:
       const apiKey = document.getElementById('apiKey').value.trim();
       let modelName = getSelectedModel();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
+      const provider = getActiveProvider();
       const temperature = Number.parseFloat(document.getElementById('writingTemperature').value);
       const maxTokens = getMaxTokensForWriting(systemPrompt, userPrompt);
       const url = `${baseUrl}/chat/completions`;
@@ -306,22 +307,45 @@ Hãy sử dụng bản phân tích trên để:
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model: modelName,
-              temperature: temperature,
-              max_tokens: maxTokens,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-              ]
-            })
-          });
+          let response;
+          if (provider === 'ollama') {
+            response = await fetch(`${baseUrl}/api/chat`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: modelName,
+                stream: false,
+                keep_alive: '30m',
+                options: {
+                  temperature: temperature,
+                  num_predict: maxTokens,
+                },
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt }
+                ]
+              })
+            });
+          } else {
+            response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify({
+                model: modelName,
+                temperature: temperature,
+                max_tokens: maxTokens,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt }
+                ]
+              })
+            });
+          }
 
           if (!response.ok) {
             const errorBody = await response.text();
@@ -367,7 +391,9 @@ Hãy sử dụng bản phân tích trên để:
           }
           recordUsageFromResponse(responseData);
 
-          const generatedText = responseData.choices?.[0]?.message?.content;
+          const generatedText = provider === 'ollama'
+            ? responseData?.message?.content
+            : responseData.choices?.[0]?.message?.content;
 
           if (!generatedText) {
             throw new Error('Phản hồi API không hợp lệ — không có nội dung trả về');
@@ -397,8 +423,9 @@ Hãy sử dụng bản phân tích trên để:
       const apiKey = document.getElementById('apiKey').value.trim();
       const modelName = getSelectedModel();
       const baseUrl = document.getElementById('baseUrl').value.trim();
+      const provider = getActiveProvider();
 
-      if (!apiKey) return showError('Vui lòng nhập API key.');
+      if (provider !== 'ollama' && !apiKey) return showError('Vui lòng nhập API key.');
       if (!modelName) return showError('Vui lòng chọn hoặc nhập tên model.');
       if (!baseUrl) return showError('Vui lòng nhập Base URL.');
       if (!fileContent) return showError('Vui lòng tải file truyện lên trước.');
