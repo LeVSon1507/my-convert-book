@@ -297,7 +297,7 @@ Hãy sử dụng bản phân tích trên để:
 
     async function callWritingApi(systemPrompt, userPrompt) {
       const apiKey = document.getElementById('apiKey').value.trim();
-      const modelName = getSelectedModel();
+      let modelName = getSelectedModel();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const temperature = Number.parseFloat(document.getElementById('writingTemperature').value);
       const maxTokens = getMaxTokensForWriting(systemPrompt, userPrompt);
@@ -325,14 +325,30 @@ Hãy sử dụng bản phân tích trên để:
 
           if (!response.ok) {
             const errorBody = await response.text();
+            let parsed = null;
             try {
-              const parsed = JSON.parse(errorBody);
-              const code = parsed?.error?.code;
-              if (code === 'model_not_supported') {
-                throw new Error('Model hiện tại không hỗ trợ chat/completions. Hãy đổi model khác trong dropdown.');
-              }
+              parsed = JSON.parse(errorBody);
             } catch {
-              // Keep fallback error below.
+              parsed = null;
+            }
+            const code = parsed?.error?.code;
+
+            if (code === 'model_not_supported') {
+              if (
+                getActiveProvider() === 'huggingface' &&
+                attempt < MAX_RETRIES &&
+                typeof globalThis.switchToSupportedHuggingFaceModel === 'function'
+              ) {
+                const fallbackModel = await globalThis.switchToSupportedHuggingFaceModel(modelName);
+                if (fallbackModel) {
+                  modelName = fallbackModel;
+                  if (typeof addLog === 'function') {
+                    addLog(`♻️ Hugging Face: chuyển model fallback sang "${fallbackModel}" cho tính năng viết tiếp.`, 'warning');
+                  }
+                  continue;
+                }
+              }
+              throw new Error('Model hiện tại không hỗ trợ chat/completions với provider Hugging Face hiện tại. Hãy dùng model từ dropdown tự nạp.');
             }
             throw new Error(`HTTP ${response.status}: ${errorBody}`);
           }

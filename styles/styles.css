@@ -68,6 +68,15 @@
     .header {
       text-align: center;
       margin-bottom: 40px;
+      position: relative;
+    }
+
+    .header-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
     }
 
     .header-badge {
@@ -107,6 +116,21 @@
       max-width: 520px;
       margin: 0 auto;
       line-height: 1.6;
+    }
+
+    .header-auth-btn {
+      min-height: auto;
+      padding: 6px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .header-auth-panel {
+      display: none;
+      max-width: 460px;
+      margin: 12px auto 0;
+      text-align: left;
+      padding: 14px;
     }
 
     /* Cards */
@@ -988,6 +1012,10 @@
         margin-bottom: 24px;
       }
 
+      .header-top-row {
+        margin-bottom: 10px;
+      }
+
       .card {
         padding: 16px;
         border-radius: var(--radius-lg);
@@ -1009,6 +1037,15 @@
     }
 
     @media (max-width: 600px) {
+      .header-auth-btn {
+        padding: 5px 9px;
+        font-size: 11px;
+      }
+
+      .header-auth-panel {
+        padding: 12px;
+      }
+
       .tabs {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1044,6 +1081,11 @@
     }
 
     @media (max-width: 360px) {
+      .header-auth-btn {
+        padding: 4px 8px;
+        font-size: 10px;
+      }
+
       .tabs {
         grid-template-columns: 1fr;
       }

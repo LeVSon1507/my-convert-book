@@ -23,6 +23,8 @@
     let currentFileHash = '';
     let openRouterPricingMap = null;
     let openRouterPricingLoadedAt = 0;
+    let huggingFaceModelsLoadedAt = 0;
+    let huggingFaceModels = null;
     let usageStats = { promptTokens: 0, completionTokens: 0, totalCost: 0 };
     let pendingResumeCheckpoint = null;
     let activeAppMode = 'translate';
@@ -259,19 +261,12 @@
       },
       huggingface: {
         baseUrl: 'https://router.huggingface.co/v1',
-        defaultModel: 'dphn/Dolphin-Mistral-24B-Venice-Edition',
-        hint: 'Nhập Hugging Face token dạng hf_... (ô API Key bên trên)',
+        defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+        hint: 'Nhập Hugging Face token dạng hf_... App sẽ tự nạp model khả dụng theo key này.',
         models: [
-          { id: 'dphn/Dolphin3.0-Qwen2.5-0.5B', label: 'Dolphin 3.0 Qwen2.5 0.5B — rẻ nhất' },
-          { id: 'dphn/Dolphin3.0-Qwen2.5-1.5B', label: 'Dolphin 3.0 Qwen2.5 1.5B — rẻ + ổn định' },
-          { id: 'dphn/Dolphin3.0-Qwen2.5-3b', label: 'Dolphin 3.0 Qwen2.5 3B — bản nhỏ mạnh hơn' },
-          { id: 'dphn/dolphin-2.9.3-mistral-7B-32k', label: 'Dolphin 2.9.3 Mistral 7B 32k — bản cao hơn' },
-          { id: 'dphn/dolphin-2.9.3-mistral-nemo-12b', label: 'Dolphin 2.9.3 Mistral Nemo 12B — cân bằng' },
-          { id: 'dphn/dolphin-2.9.1-yi-1.5-34b', label: 'Dolphin 2.9.1 Yi 34B — chất lượng cao hơn' },
-          { id: 'dphn/Dolphin-Mistral-24B-Venice-Edition', label: 'Dolphin Mistral 24B Venice Edition' },
-          { id: 'dphn/dolphin-2.9.2-qwen2-72b', label: 'Dolphin 2.9.2 Qwen2 72B — bản lớn' },
-          { id: 'mistralai/Mistral-Small-24B-Instruct-2501', label: 'Mistral Small 24B Instruct 2501' },
-          { id: 'mistralai/Mistral-Small-24B-Base-2501', label: 'Mistral Small 24B Base 2501' },
+          { id: 'Qwen/Qwen2.5-7B-Instruct', label: 'Qwen 2.5 7B Instruct — fallback' },
+          { id: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct — fallback' },
+          { id: 'google/gemma-4-31B-it', label: 'Gemma 4 31B IT — fallback' },
           { id: '__custom__', label: '✏️ Nhập model ID...' },
         ]
       },
@@ -303,17 +298,12 @@
       'x-ai/grok-4.1-fast': 2000000,
       'x-ai/grok-4-fast': 2000000,
       'x-ai/grok-4.20': 1000000,
-      // Hugging Face models
-      'dphn/Dolphin3.0-Qwen2.5-0.5B': 32768,
-      'dphn/Dolphin3.0-Qwen2.5-1.5B': 32768,
-      'dphn/Dolphin3.0-Qwen2.5-3b': 32768,
-      'dphn/dolphin-2.9.3-mistral-7B-32k': 32768,
-      'dphn/dolphin-2.9.3-mistral-nemo-12b': 128000,
-      'dphn/dolphin-2.9.1-yi-1.5-34b': 128000,
-      'dphn/Dolphin-Mistral-24B-Venice-Edition': 131072,
-      'dphn/dolphin-2.9.2-qwen2-72b': 128000,
-      'mistralai/Mistral-Small-24B-Instruct-2501': 128000,
-      'mistralai/Mistral-Small-24B-Base-2501': 128000,
+      // Hugging Face dynamic model list (fallback context limits)
+      'Qwen/Qwen2.5-7B-Instruct': 128000,
+      'meta-llama/Llama-3.1-8B-Instruct': 128000,
+      'google/gemma-4-31B-it': 128000,
+      'Qwen/Qwen3.6-35B-A3B': 128000,
+      'deepseek-ai/DeepSeek-V4-Flash': 128000,
     };
 
     // Token pricing (USD per 1M tokens) - approximate rates
@@ -343,17 +333,12 @@
       // Fallback values; app will auto-refresh live OpenRouter pricing when available.
       'x-ai/grok-4.1-fast': { input: 0.20, output: 0.50 },
       'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
-      // Hugging Face routing varies by provider/hardware; placeholder for estimation UI
-      'dphn/Dolphin3.0-Qwen2.5-0.5B': { input: 0.01, output: 0.03 },
-      'dphn/Dolphin3.0-Qwen2.5-1.5B': { input: 0.02, output: 0.05 },
-      'dphn/Dolphin3.0-Qwen2.5-3b': { input: 0.03, output: 0.08 },
-      'dphn/dolphin-2.9.3-mistral-7B-32k': { input: 0.05, output: 0.12 },
-      'dphn/dolphin-2.9.3-mistral-nemo-12b': { input: 0.08, output: 0.20 },
-      'dphn/dolphin-2.9.1-yi-1.5-34b': { input: 0.20, output: 0.60 },
-      'dphn/Dolphin-Mistral-24B-Venice-Edition': { input: 0.20, output: 0.60 },
-      'dphn/dolphin-2.9.2-qwen2-72b': { input: 0.50, output: 1.50 },
-      'mistralai/Mistral-Small-24B-Instruct-2501': { input: 0.10, output: 0.30 },
-      'mistralai/Mistral-Small-24B-Base-2501': { input: 0.10, output: 0.30 },
+      // Hugging Face routing varies by provider/hardware; conservative placeholders.
+      'Qwen/Qwen2.5-7B-Instruct': { input: 0.10, output: 0.30 },
+      'meta-llama/Llama-3.1-8B-Instruct': { input: 0.12, output: 0.35 },
+      'google/gemma-4-31B-it': { input: 0.20, output: 0.60 },
+      'Qwen/Qwen3.6-35B-A3B': { input: 0.25, output: 0.70 },
+      'deepseek-ai/DeepSeek-V4-Flash': { input: 0.25, output: 0.70 },
     };
 
     async function ensureOpenRouterPricingLoaded() {
@@ -391,6 +376,120 @@
 
       return openRouterPricingMap;
     }
+
+    function formatHuggingFaceModelLabel(modelId) {
+      if (!modelId) return '';
+      const tail = String(modelId).split('/').pop() || String(modelId);
+      return tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    }
+
+    function isPreferredHuggingFaceModelId(modelId) {
+      const id = String(modelId || '').toLowerCase();
+      return id.includes('dolphin') || id.includes('uncensor') || id.includes('uncensored');
+    }
+
+    function getHuggingFaceFallbackModels() {
+      return [
+        { id: 'Qwen/Qwen2.5-7B-Instruct', label: 'Qwen 2.5 7B Instruct — fallback' },
+        { id: 'meta-llama/Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct — fallback' },
+        { id: 'google/gemma-4-31B-it', label: 'Gemma 4 31B IT — fallback' },
+      ];
+    }
+
+    async function ensureHuggingFaceModelsLoaded(force) {
+      const CACHE_TTL_MS = 10 * 60 * 1000;
+      const shouldForce = Boolean(force);
+      const now = Date.now();
+      const activeProvider = getActiveProvider();
+      const apiKey = document.getElementById('apiKey')?.value?.trim() || '';
+
+      if (!apiKey) return PROVIDER_CONFIGS.huggingface.models;
+      if (
+        !shouldForce &&
+        activeProvider === 'huggingface' &&
+        huggingFaceModels &&
+        huggingFaceModels.length > 0 &&
+        (now - huggingFaceModelsLoadedAt) < CACHE_TTL_MS
+      ) {
+        return huggingFaceModels;
+      }
+
+      try {
+        const response = await fetch('https://router.huggingface.co/v1/models', {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Accept': 'application/json',
+          }
+        });
+        if (!response.ok) return PROVIDER_CONFIGS.huggingface.models;
+
+        const payload = await response.json();
+        const rawList = Array.isArray(payload?.data) ? payload.data : [];
+
+        const normalized = rawList
+          .map(function(item) {
+            const id = String(item?.id || '').trim();
+            if (!id) return null;
+            const providerCount = Array.isArray(item?.providers) ? item.providers.length : 0;
+            const preferred = isPreferredHuggingFaceModelId(id);
+            return {
+              id: id,
+              label: `${formatHuggingFaceModelLabel(id)}${preferred ? ' ⭐ uncensor' : ''}${providerCount ? ` · ${providerCount} provider` : ''}`,
+              providerCount: providerCount,
+              preferred: preferred
+            };
+          })
+          .filter(Boolean)
+          .sort(function(a, b) {
+            if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+            if (b.providerCount !== a.providerCount) return b.providerCount - a.providerCount;
+            return a.id.localeCompare(b.id);
+          })
+          .slice(0, 200)
+          .map(function(item) { return { id: item.id, label: item.label }; });
+
+        if (normalized.length > 0) {
+          huggingFaceModels = normalized;
+          huggingFaceModelsLoadedAt = now;
+          PROVIDER_CONFIGS.huggingface.models = huggingFaceModels.concat([{ id: '__custom__', label: '✏️ Nhập model ID...' }]);
+          const currentDefault = PROVIDER_CONFIGS.huggingface.defaultModel;
+          const preferredDefault = huggingFaceModels.find(function(m) { return isPreferredHuggingFaceModelId(m.id); });
+          const safeDefault = preferredDefault ? preferredDefault.id : huggingFaceModels[0].id;
+          if (!currentDefault || !huggingFaceModels.some(function(m) { return m.id === currentDefault; })) {
+            PROVIDER_CONFIGS.huggingface.defaultModel = safeDefault;
+          } else if (preferredDefault && !isPreferredHuggingFaceModelId(currentDefault)) {
+            PROVIDER_CONFIGS.huggingface.defaultModel = safeDefault;
+          }
+        }
+      } catch {
+        // Keep fallback model list if network fails.
+      }
+
+      return PROVIDER_CONFIGS.huggingface.models;
+    }
+
+    async function switchToSupportedHuggingFaceModel(failedModel) {
+      await ensureHuggingFaceModelsLoaded(true);
+      const models = PROVIDER_CONFIGS.huggingface.models || [];
+      const candidates = models.filter(function(item) {
+        return item.id && item.id !== '__custom__' && item.id !== failedModel;
+      });
+      const candidate = candidates.find(function(item) { return isPreferredHuggingFaceModelId(item.id); }) || candidates[0];
+      if (!candidate) return null;
+
+      const select = document.getElementById('modelSelect');
+      const exists = Array.from(select.options).some(function(opt) { return opt.value === candidate.id; });
+      if (exists) {
+        select.value = candidate.id;
+        onModelSelectChange(candidate.id);
+      } else {
+        document.getElementById('modelName').value = candidate.id;
+      }
+      return candidate.id;
+    }
+
+    globalThis.ensureHuggingFaceModelsLoaded = ensureHuggingFaceModelsLoaded;
+    globalThis.switchToSupportedHuggingFaceModel = switchToSupportedHuggingFaceModel;
 
     function getOptimalChunkSize(model) {
       const limit = MODEL_CONTEXT_LIMITS[model] || 32000;
@@ -828,6 +927,15 @@
           }
         });
       }
+      if (provider === 'huggingface') {
+        ensureHuggingFaceModelsLoaded().then(function() {
+          buildModelDropdown('huggingface');
+          if (fileContent) {
+            updateCostEstimation();
+            updateWritingCostEstimation();
+          }
+        });
+      }
 
       document.querySelectorAll('#providerTabs .tab').forEach(function(tab) {
         tab.classList.toggle('active', tab.dataset.provider === provider);
@@ -856,6 +964,28 @@
       const hint = document.getElementById('keySavedHint');
       hint.textContent = '✅ Đã lưu key cho ' + provider + ' vào browser.';
       hint.style.display = 'block';
+      if (provider === 'huggingface') {
+        ensureHuggingFaceModelsLoaded(true).then(function() {
+          buildModelDropdown('huggingface');
+        });
+      }
+    }
+
+    async function saveApiKeyToAccount() {
+      const provider = getActiveProvider();
+      const apiKey = document.getElementById('apiKey').value.trim();
+      if (!apiKey) return;
+      const hint = document.getElementById('keySavedHint');
+      if (!currentFirebaseUser || typeof cloudSaveApiKey !== 'function') {
+        hint.textContent = '⚠️ Cần đăng nhập account để lưu key lên cloud.';
+        hint.style.display = 'block';
+        return;
+      }
+      const ok = await cloudSaveApiKey(provider, apiKey);
+      hint.textContent = ok
+        ? '☁️ Đã lưu key cho ' + provider + ' vào account.'
+        : '❌ Không lưu được key lên account.';
+      hint.style.display = 'block';
     }
 
     function clearApiKey() {
@@ -865,6 +995,13 @@
       const hint = document.getElementById('keySavedHint');
       hint.textContent = '🗑 Đã xóa key.';
       hint.style.display = 'block';
+      if (provider === 'huggingface') {
+        huggingFaceModels = getHuggingFaceFallbackModels();
+        huggingFaceModelsLoadedAt = 0;
+        PROVIDER_CONFIGS.huggingface.models = huggingFaceModels.concat([{ id: '__custom__', label: '✏️ Nhập model ID...' }]);
+        PROVIDER_CONFIGS.huggingface.defaultModel = huggingFaceModels[0].id;
+        buildModelDropdown('huggingface');
+      }
       setTimeout(function() { hint.style.display = 'none'; }, 2000);
     }
 
@@ -880,6 +1017,28 @@
       } else {
         document.getElementById('apiKey').value = '';
         hint.style.display = 'none';
+      }
+      if (provider === 'huggingface' && keyToUse) {
+        ensureHuggingFaceModelsLoaded().then(function() {
+          buildModelDropdown('huggingface');
+        });
+      }
+
+      if (!savedKey && currentFirebaseUser && typeof cloudLoadApiKey === 'function') {
+        cloudLoadApiKey(provider).then(function(cloudKey) {
+          if (!cloudKey) return;
+          if (provider !== getActiveProvider()) return;
+          const currentValue = document.getElementById('apiKey').value.trim();
+          if (currentValue) return;
+          document.getElementById('apiKey').value = cloudKey;
+          hint.textContent = '☁️ Đã load key cloud cho ' + provider + '.';
+          hint.style.display = 'block';
+          if (provider === 'huggingface') {
+            ensureHuggingFaceModelsLoaded(true).then(function() {
+              buildModelDropdown('huggingface');
+            });
+          }
+        });
       }
     }
 
@@ -1359,7 +1518,7 @@
 
     async function translateChunkWithRetry(chunk, chunkIndex, maxRetries, chunkHash = null, glossaryInstruction = '') {
       const apiKey = document.getElementById('apiKey').value.trim();
-      const modelName = getSelectedModel();
+      let modelName = getSelectedModel();
       const provider = getActiveProvider();
       const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
       const baseSystemPrompt = document.getElementById('systemPrompt').value.trim();
@@ -1390,22 +1549,40 @@
 
           if (!response.ok) {
             const errorBody = await response.text();
+            let parsed = null;
             try {
-              const parsed = JSON.parse(errorBody);
-              const code = parsed?.error?.code;
-              if (code === 'model_not_supported') {
-                const modelLabel = getSelectedModel();
-                throw new Error(`Model "${modelLabel}" không hỗ trợ chat/completions trên Hugging Face Router. Hãy chọn model khác trong danh sách.`);
-              }
-              if (code === 'model_not_found') {
-                const modelLabel = getSelectedModel();
-                throw new Error(`Model "${modelLabel}" không tồn tại hoặc không khả dụng với provider hiện tại.`);
-              }
+              parsed = JSON.parse(errorBody);
             } catch {
-              // Ignore parse issues and use raw error below.
+              parsed = null;
             }
+            const code = parsed?.error?.code;
+
+            if (code === 'model_not_supported') {
+              if (provider === 'huggingface' && attempt < maxRetries) {
+                const fallbackModel = await switchToSupportedHuggingFaceModel(modelName);
+                if (fallbackModel) {
+                  modelName = fallbackModel;
+                  addLog(`♻️ Hugging Face: chuyển model fallback sang "${fallbackModel}" sau lỗi model_not_supported.`, 'warning');
+                  continue;
+                }
+              }
+
+              const unsupportedError = new Error(`Model "${modelName}" không hỗ trợ chat/completions với provider Hugging Face hiện tại. Hãy dùng model từ dropdown tự nạp.`);
+              unsupportedError.status = response.status;
+              unsupportedError.code = code;
+              throw unsupportedError;
+            }
+
+            if (code === 'model_not_found') {
+              const notFoundError = new Error(`Model "${modelName}" không tồn tại hoặc không khả dụng với provider hiện tại.`);
+              notFoundError.status = response.status;
+              notFoundError.code = code;
+              throw notFoundError;
+            }
+
             const error = new Error(`HTTP ${response.status}: ${errorBody}`);
             error.status = response.status;
+            error.code = code;
             throw error;
           }
 

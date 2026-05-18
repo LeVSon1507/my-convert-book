@@ -6,6 +6,7 @@
     let _fbAuth = null;
     let _fbDb = null;
     let lastCloudProgressSavedAt = 0;
+    let headerAuthPanelOpen = false;
 
     function initFirebase() {
       const config = globalThis.FIREBASE_CONFIG;
@@ -40,6 +41,7 @@
       btn.disabled = true;
       try {
         await _fbAuth.signInWithEmailAndPassword(email, password);
+        toggleHeaderAuthPanel(false);
       } catch (e) {
         errEl.textContent = firebaseAuthMsg(e.code);
       } finally {
@@ -59,6 +61,7 @@
       btn.disabled = true;
       try {
         await _fbAuth.createUserWithEmailAndPassword(email, password);
+        toggleHeaderAuthPanel(false);
       } catch (e) {
         errEl.textContent = firebaseAuthMsg(e.code);
       } finally {
@@ -69,6 +72,7 @@
     async function cloudLogout() {
       if (!_fbAuth) return;
       await _fbAuth.signOut();
+      toggleHeaderAuthPanel(false);
     }
 
     function firebaseAuthMsg(code) {
@@ -87,14 +91,80 @@
     function updateAuthUI() {
       const loginForm = document.getElementById('authLoginForm');
       const loggedInRow = document.getElementById('authLoggedIn');
+      const headerBtn = document.getElementById('headerAuthBtn');
+      const saveKeyToAccountBtn = document.getElementById('saveKeyToAccountBtn');
       if (!loginForm) return;
       if (currentFirebaseUser) {
         loginForm.style.display = 'none';
         loggedInRow.style.display = 'flex';
         document.getElementById('authUserEmail').textContent = currentFirebaseUser.email;
+        if (headerBtn) {
+          const email = String(currentFirebaseUser.email || '');
+          const accountName = email.split('@')[0] || email;
+          headerBtn.textContent = accountName || 'Tài khoản';
+        }
+        if (saveKeyToAccountBtn) saveKeyToAccountBtn.style.display = 'inline-flex';
       } else {
         loginForm.style.display = 'block';
         loggedInRow.style.display = 'none';
+        if (headerBtn) headerBtn.textContent = 'Đăng nhập';
+        if (saveKeyToAccountBtn) saveKeyToAccountBtn.style.display = 'none';
+      }
+      if (typeof loadSavedApiKey === 'function') {
+        loadSavedApiKey(getActiveProvider());
+      }
+    }
+
+    function toggleHeaderAuthPanel(forceOpen) {
+      const panel = document.getElementById('headerAuthPanel');
+      if (!panel) return;
+      if (typeof forceOpen === 'boolean') {
+        headerAuthPanelOpen = forceOpen;
+      } else {
+        headerAuthPanelOpen = !headerAuthPanelOpen;
+      }
+      panel.style.display = headerAuthPanelOpen ? 'block' : 'none';
+    }
+
+    async function cloudSaveApiKey(provider, apiKey) {
+      if (!currentFirebaseUser || !_fbDb || !provider || !apiKey) return false;
+      try {
+        const uid = currentFirebaseUser.uid;
+        await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc('api_keys')
+          .set(
+            {
+              [provider]: apiKey,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+          );
+        return true;
+      } catch (e) {
+        console.error('Cloud save api key error:', e);
+        return false;
+      }
+    }
+
+    async function cloudLoadApiKey(provider) {
+      if (!currentFirebaseUser || !_fbDb || !provider) return '';
+      try {
+        const uid = currentFirebaseUser.uid;
+        const snap = await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc('api_keys')
+          .get();
+        if (!snap.exists) return '';
+        const data = snap.data() || {};
+        return String(data[provider] || '');
+      } catch (e) {
+        console.error('Cloud load api key error:', e);
+        return '';
       }
     }
 

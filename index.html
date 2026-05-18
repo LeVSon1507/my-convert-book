@@ -18,12 +18,79 @@
   <body>
     <div class="app-wrapper">
       <div class="header">
-        <div class="header-badge">Trình Dịch Truyện AI</div>
+        <div class="header-top-row">
+          <div class="header-badge">Trình Dịch Truyện AI</div>
+          <button
+            id="headerAuthBtn"
+            class="btn btn-secondary btn-sm header-auth-btn"
+            onclick="toggleHeaderAuthPanel()"
+          >
+            Đăng nhập
+          </button>
+        </div>
         <h1>Dịch Truyện Chất Lượng Cao</h1>
         <p class="header-subtitle">
           Hỗ trợ file .txt lớn (15–20 MB), dịch sang tiếng Việt thuần bằng Grok,
           ChatGPT API, Gemini hoặc OpenRouter
         </p>
+        <div id="headerAuthPanel" class="card auth-card header-auth-panel">
+          <div id="authLoginForm">
+            <div class="auth-header">
+              <div class="auth-icon">☁️</div>
+              <div class="auth-title">Lưu trữ đám mây</div>
+              <div class="auth-subtitle">
+                Đăng nhập để đồng bộ lịch sử dịch trên mọi thiết bị
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="authEmail">Email</label>
+              <input
+                type="email"
+                id="authEmail"
+                placeholder="your@email.com"
+                autocomplete="email"
+              />
+            </div>
+            <div class="form-group">
+              <label for="authPassword">Mật khẩu</label>
+              <input
+                type="password"
+                id="authPassword"
+                placeholder="Tối thiểu 6 ký tự"
+                autocomplete="current-password"
+                onkeydown="if (event.key === 'Enter') cloudLogin();"
+              />
+            </div>
+            <div id="authError" class="auth-error"></div>
+            <button
+              id="loginBtn"
+              class="btn btn-primary btn-full"
+              onclick="cloudLogin()"
+            >
+              Đăng nhập
+            </button>
+            <div class="auth-divider"><span>chưa có tài khoản?</span></div>
+            <button
+              id="registerBtn"
+              class="btn btn-secondary btn-full"
+              onclick="cloudRegister()"
+            >
+              Tạo tài khoản miễn phí
+            </button>
+          </div>
+          <div id="authLoggedIn" class="auth-logged-in">
+            <div class="auth-user-info">
+              <div class="auth-avatar">✓</div>
+              <div>
+                <div class="auth-user-label">Đã đăng nhập</div>
+                <div id="authUserEmail" class="auth-user-email"></div>
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="cloudLogout()">
+              Đăng xuất
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="card" style="padding: 12px">
@@ -121,6 +188,14 @@
                 style="flex: 1; padding: 6px 12px; font-size: 12px"
               >
                 💾 Lưu key vào browser
+              </button>
+              <button
+                class="btn btn-secondary"
+                id="saveKeyToAccountBtn"
+                onclick="saveApiKeyToAccount()"
+                style="display: none; flex: 1; padding: 6px 12px; font-size: 12px"
+              >
+                ☁️ Lưu key vào account
               </button>
               <button
                 class="btn btn-danger"
@@ -723,65 +798,6 @@ Bạn là dịch giả văn học.
       </div>
 
       <div data-mode-section="history" style="display: none">
-        <!-- Auth Card -->
-        <div class="card auth-card" style="margin-bottom: 16px">
-          <div id="authLoginForm">
-            <div class="auth-header">
-              <div class="auth-icon">☁️</div>
-              <div class="auth-title">Lưu trữ đám mây</div>
-              <div class="auth-subtitle">
-                Đăng nhập để đồng bộ lịch sử dịch trên mọi thiết bị
-              </div>
-            </div>
-            <div class="form-group">
-              <label for="authEmail">Email</label>
-              <input
-                type="email"
-                id="authEmail"
-                placeholder="your@email.com"
-                autocomplete="email"
-              />
-            </div>
-            <div class="form-group">
-              <label for="authPassword">Mật khẩu</label>
-              <input
-                type="password"
-                id="authPassword"
-                placeholder="Tối thiểu 6 ký tự"
-                autocomplete="current-password"
-                onkeydown="if (event.key === 'Enter') cloudLogin();"
-              />
-            </div>
-            <div id="authError" class="auth-error"></div>
-            <button
-              id="loginBtn"
-              class="btn btn-primary btn-full"
-              onclick="cloudLogin()"
-            >
-              Đăng nhập
-            </button>
-            <div class="auth-divider"><span>chưa có tài khoản?</span></div>
-            <button
-              id="registerBtn"
-              class="btn btn-secondary btn-full"
-              onclick="cloudRegister()"
-            >
-              Tạo tài khoản miễn phí
-            </button>
-          </div>
-          <div id="authLoggedIn" class="auth-logged-in">
-            <div class="auth-user-info">
-              <div class="auth-avatar">✓</div>
-              <div>
-                <div class="auth-user-label">Đã đăng nhập</div>
-                <div id="authUserEmail" class="auth-user-email"></div>
-              </div>
-            </div>
-            <button class="btn btn-secondary btn-sm" onclick="cloudLogout()">
-              Đăng xuất
-            </button>
-          </div>
-        </div>
         <!-- History List -->
         <div class="card">
           <div class="card-title">
