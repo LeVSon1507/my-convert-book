@@ -122,6 +122,9 @@ function getRequestTimeoutMs(provider) {
   if (provider === "ollama") {
     return 180000;
   }
+  if (provider === "openrouter") {
+    return 150000;
+  }
   return 90000;
 }
 
@@ -154,4 +157,3 @@ function updateCacheStatsUI() {
     }
   }
 }
-

@@ -271,15 +271,50 @@ async function callChatApiDirect(provider, baseUrl, apiKey, payload, signal) {
   });
 }
 
-async function requestChatCompletions(provider, baseUrl, apiKey, payload, signal) {
+async function requestChatCompletions(
+  provider,
+  baseUrl,
+  apiKey,
+  payload,
+  signal,
+) {
   if (provider === "ollama") {
     return callChatApiDirect(provider, baseUrl, apiKey, payload, signal);
   }
 
+  const forceProxy = Boolean(getRuntimeConfig()?.useChatProxy);
+
+  if (!forceProxy) {
+    try {
+      return await callChatApiDirect(
+        provider,
+        baseUrl,
+        apiKey,
+        payload,
+        signal,
+      );
+    } catch (directError) {
+      // If browser blocks direct cross-origin (CORS/network), try proxy fallback.
+      return await callChatApiViaProxy(
+        provider,
+        baseUrl,
+        apiKey,
+        payload,
+        signal,
+      );
+    }
+  }
+
   try {
-    return await callChatApiViaProxy(provider, baseUrl, apiKey, payload, signal);
+    return await callChatApiViaProxy(
+      provider,
+      baseUrl,
+      apiKey,
+      payload,
+      signal,
+    );
   } catch (proxyError) {
-    // Fallback for static-host/dev mode when /api route is unavailable.
+    // Fallback when proxy is unavailable.
     return await callChatApiDirect(provider, baseUrl, apiKey, payload, signal);
   }
 }
