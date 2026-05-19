@@ -83,7 +83,25 @@ export async function loadOptionalLocalConfig() {
 }
 
 export async function loadLegacyScripts() {
-  const scripts = ['/scripts/translate.js', '/scripts/writing.js', '/scripts/cloud.js'];
+  const scripts = [
+    '/scripts/translate/01-state-and-boot.js',
+    '/scripts/translate/02-provider-and-model-config.js',
+    '/scripts/translate/03-model-loading-and-base-utils.js',
+    '/scripts/translate/04-translation-quality-utils.js',
+    '/scripts/translate/05-cost-and-provider-ui.js',
+    '/scripts/translate/06-api-key-and-checkpoint.js',
+    '/scripts/translate/07-history-and-file-loading.js',
+    '/scripts/translate/08-chunking-and-runtime-controls.js',
+    '/scripts/translate/09a-translate-chunk.js',
+    '/scripts/translate/09b-process-chunks.js',
+    '/scripts/translate/10-translation-runner.js',
+    '/scripts/translate/11-export-and-result.js',
+    '/scripts/translate/12-ui-events-and-reset.js',
+    '/scripts/writing/01-analysis-and-prompts.js',
+    '/scripts/writing/02-api-and-writing-flow.js',
+    '/scripts/writing/03-writing-ui-actions.js',
+    '/scripts/cloud.js'
+  ];
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -101,11 +119,26 @@ export async function loadLegacyScripts() {
   }
 }
 
+export async function loadAppHtmlPartial() {
+  const mount = document.getElementById('appContentMount');
+  if (!mount) return;
+  if (mount.dataset.hydrated === 'true') return;
+
+  const partialPath = mount.dataset.partial || '/partials/app-content.html';
+  const response = await fetch(partialPath, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Không tải được partial giao diện: ${partialPath}`);
+  }
+  mount.innerHTML = await response.text();
+  mount.dataset.hydrated = 'true';
+}
+
 export async function bootstrapApp() {
   await loadOptionalLocalConfig();
   await resolveServerRuntimeConfig();
   applyLocalRuntimeConfig();
   await resolveFirebaseConfig();
+  await loadAppHtmlPartial();
   await loadLegacyScripts();
   if (typeof globalThis.bootApp === 'function') {
     globalThis.bootApp();

@@ -1,0 +1,980 @@
+    <div class="app-wrapper">
+      <div class="header">
+        <div class="header-top-row">
+          <div class="header-badge">Trình Dịch Truyện AI</div>
+          <button
+            id="headerAuthBtn"
+            class="btn btn-secondary btn-sm header-auth-btn"
+            onclick="toggleHeaderAuthPanel()"
+          >
+            Đăng nhập
+          </button>
+        </div>
+        <h1>Dịch Truyện Chất Lượng Cao</h1>
+        <p class="header-subtitle">
+          Hỗ trợ file .txt lớn (15–20 MB), dịch sang tiếng Việt thuần bằng Grok,
+          ChatGPT API, Gemini hoặc OpenRouter
+        </p>
+        <div id="headerAuthPanel" class="card auth-card header-auth-panel">
+          <div id="authLoginForm">
+            <div class="auth-header">
+              <div class="auth-icon">☁️</div>
+              <div class="auth-title">Lưu trữ đám mây</div>
+              <div class="auth-subtitle">
+                Đăng nhập để đồng bộ lịch sử dịch trên mọi thiết bị
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="authEmail">Email</label>
+              <input
+                type="email"
+                id="authEmail"
+                placeholder="your@email.com"
+                autocomplete="email"
+              />
+            </div>
+            <div class="form-group">
+              <label for="authPassword">Mật khẩu</label>
+              <input
+                type="password"
+                id="authPassword"
+                placeholder="Tối thiểu 6 ký tự"
+                autocomplete="current-password"
+                onkeydown="if (event.key === 'Enter') cloudLogin();"
+              />
+            </div>
+            <div id="authError" class="auth-error"></div>
+            <button
+              id="loginBtn"
+              class="btn btn-primary btn-full"
+              onclick="cloudLogin()"
+            >
+              Đăng nhập
+            </button>
+            <div class="auth-divider"><span>chưa có tài khoản?</span></div>
+            <button
+              id="registerBtn"
+              class="btn btn-secondary btn-full"
+              onclick="cloudRegister()"
+            >
+              Tạo tài khoản miễn phí
+            </button>
+          </div>
+          <div id="authLoggedIn" class="auth-logged-in">
+            <div class="auth-user-info">
+              <div class="auth-avatar">✓</div>
+              <div>
+                <div class="auth-user-label">Đã đăng nhập</div>
+                <div id="authUserEmail" class="auth-user-email"></div>
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="cloudLogout()">
+              Đăng xuất
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding: 12px">
+        <div class="tabs" id="modeTabs">
+          <button
+            class="tab active"
+            data-mode="translate"
+            onclick="switchAppMode('translate')"
+          >
+            Dịch mới
+          </button>
+          <button
+            class="tab"
+            data-mode="writing"
+            onclick="switchAppMode('writing')"
+          >
+            Viết tiếp truyện
+          </button>
+          <button
+            class="tab"
+            data-mode="history"
+            onclick="switchAppMode('history')"
+          >
+            Lịch sử
+          </button>
+        </div>
+      </div>
+      <div data-mode-section="translate">
+        <!-- Step 1: API Config -->
+        <div class="card" id="apiCard">
+          <div class="card-title api-config-header">
+            <span><span class="icon">🔑</span> Cấu hình API</span>
+            <button
+              type="button"
+              class="api-collapse-btn"
+              id="providerTabsToggleBtn"
+              onclick="toggleProviderTabsCollapse()"
+            >
+              Thu gọn tab
+            </button>
+          </div>
+
+          <div class="tabs provider-tabs" id="providerTabs">
+            <button
+              class="tab active"
+              data-provider="grok"
+              onclick="switchProvider('grok')"
+            >
+              Grok (xAI)
+            </button>
+            <button
+              class="tab"
+              data-provider="openai"
+              onclick="switchProvider('openai')"
+            >
+              ChatGPT API
+            </button>
+            <button
+              class="tab"
+              data-provider="gemini"
+              onclick="switchProvider('gemini')"
+            >
+              Gemini
+            </button>
+            <button
+              class="tab"
+              data-provider="openrouter"
+              onclick="switchProvider('openrouter')"
+            >
+              OpenRouter
+            </button>
+            <button
+              class="tab"
+              data-provider="huggingface"
+              onclick="switchProvider('huggingface')"
+            >
+              Hugging Face
+            </button>
+            <button
+              class="tab"
+              data-provider="ollama"
+              onclick="switchProvider('ollama')"
+            >
+              Ollama Local
+            </button>
+          </div>
+
+          <div class="form-group" id="apiKeyGroup">
+            <label for="apiKey">API Key</label>
+            <div class="password-wrapper">
+              <input
+                type="password"
+                id="apiKey"
+                placeholder="Nhập API key của bạn..."
+                autocomplete="off"
+              />
+              <button
+                class="toggle-visibility"
+                onclick="toggleApiKeyVisibility()"
+                id="toggleApiKeyBtn"
+                title="Hiện/ẩn API key"
+              >
+                👁
+              </button>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 6px">
+              <button
+                class="btn btn-secondary"
+                onclick="saveApiKey()"
+                style="flex: 1; padding: 6px 12px; font-size: 12px"
+              >
+                💾 Lưu key vào browser
+              </button>
+              <button
+                class="btn btn-secondary"
+                id="saveKeyToAccountBtn"
+                onclick="saveApiKeyToAccount()"
+                style="display: none; flex: 1; padding: 6px 12px; font-size: 12px"
+              >
+                ☁️ Lưu key vào account
+              </button>
+              <button
+                class="btn btn-danger"
+                onclick="clearApiKey()"
+                style="padding: 6px 12px; font-size: 12px"
+              >
+                🗑 Xóa
+              </button>
+            </div>
+            <div
+              id="keySavedHint"
+              style="
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-top: 4px;
+                display: none;
+              "
+            ></div>
+          </div>
+
+          <div class="form-group">
+            <label for="modelSelect">Model</label>
+            <select
+              id="modelSelect"
+              onchange="onModelSelectChange(this.value)"
+            ></select>
+            <div class="model-hint" id="modelHint"></div>
+          </div>
+          <div class="form-group" id="openrouterSubGroup" style="display: none">
+            <label for="openrouterModelGroup">Nhóm model OpenRouter</label>
+            <select
+              id="openrouterModelGroup"
+              onchange="onOpenRouterGroupChange(this.value)"
+            >
+              <option value="mistral_translation">
+                Mistral dịch truyện (rẻ + ổn)
+              </option>
+              <option value="grok_budget">Grok/xAI rẻ</option>
+            </select>
+          </div>
+          <div class="form-group" id="customModelGroup" style="display: none">
+            <label for="modelName">Model ID (tùy chỉnh)</label>
+            <input
+              type="text"
+              id="modelName"
+              placeholder="e.g. x-ai/grok-3-mini"
+            />
+          </div>
+          <div class="form-group">
+            <label for="baseUrl">Base URL</label>
+            <input
+              type="text"
+              id="baseUrl"
+              value="https://api.x.ai/v1"
+              placeholder="https://api.x.ai/v1"
+            />
+          </div>
+        </div>
+
+        <!-- Step 2: File Upload -->
+        <div class="card">
+          <div class="card-title">
+            <span class="icon">📂</span> Chọn file truyện
+          </div>
+
+          <div
+            class="drop-zone"
+            id="dropZone"
+            onclick="document.getElementById('fileInput').click()"
+          >
+            <span class="drop-icon">📄</span>
+            <div class="drop-title">Kéo thả file vào đây</div>
+            <div class="drop-subtitle">
+              hoặc click để chọn file · Hỗ trợ .txt, .md, .text
+            </div>
+            <input
+              type="file"
+              id="fileInput"
+              accept=".txt,.md,.text"
+              style="display: none"
+              onchange="handleFileSelect(this)"
+            />
+          </div>
+
+          <div class="file-info" id="fileInfo"></div>
+        </div>
+
+        <!-- Cost Estimation (after file upload) -->
+        <div
+          class="card cost-estimation-card"
+          id="costEstimationCard"
+          style="display: none"
+        >
+          <div class="card-title">
+            <span class="icon">💰</span> Ước tính chi phí
+          </div>
+          <div id="costEstimationContent"></div>
+          <div id="cacheStatsContainer" style="display: none; margin-top: 8px">
+            <div class="cache-stats">
+              <span class="cache-stat" id="cacheStat"
+                >Cache: 0 hit, 0 miss</span
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Translation Settings -->
+        <div class="card">
+          <div class="card-title">
+            <span class="icon">⚙️</span> Cài đặt dịch
+          </div>
+
+          <div class="form-group">
+            <label for="systemPrompt">System Prompt (chỉ thị dịch)</label>
+            <textarea id="systemPrompt">
+Bạn là dịch giả văn học.
+- Dịch tự nhiên sang tiếng Việt thuần, mạch lạc.
+- Dịch đủ ý, không bỏ sót câu/đoạn.
+- Không lặp câu, không lặp đoạn.
+- Không chèn lại bản gốc chưa dịch.
+- Giữ nguyên tên riêng nếu chưa có bản dịch phổ biến.
+- Giữ giọng văn và cấu trúc xuống dòng bản gốc.
+- Dấu câu theo văn phong tiếng Việt tự nhiên, dễ đọc.
+- Không thêm giải thích/bình luận.
+- Chỉ trả về văn bản đã dịch.</textarea
+            >
+          </div>
+
+          <div class="input-row">
+            <div class="form-group">
+              <label for="chunkSize">Kích thước mỗi đoạn (ký tự)</label>
+              <input
+                type="number"
+                id="chunkSize"
+                value="6000"
+                min="500"
+                max="12000"
+                step="500"
+              />
+            </div>
+            <div class="form-group">
+              <label for="concurrentRequests">Số yêu cầu song song</label>
+              <input
+                type="number"
+                id="concurrentRequests"
+                value="10"
+                min="1"
+                max="200"
+                step="1"
+              />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="translationScope">Phạm vi dịch</label>
+            <select id="translationScope">
+              <option value="100" selected>100% (toàn bộ truyện)</option>
+              <option value="70">70% đầu truyện</option>
+              <option value="50">50% đầu truyện</option>
+              <option value="30">30% đầu truyện</option>
+              <option value="20">20% đầu truyện</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="glossaryInput"
+              >Glossary tên riêng/địa danh
+              <span
+                style="
+                  font-size: 11px;
+                  color: var(--text-muted);
+                  font-weight: 400;
+                "
+                >(mỗi dòng: nguồn => bản dịch)</span
+              ></label
+            >
+            <textarea
+              id="glossaryInput"
+              rows="5"
+              placeholder="张三 => Trương Tam&#10;李青云 => Lý Thanh Vân&#10;修真界 => Tu Chân Giới"
+            ></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Temperature: <span id="tempDisplay">0.3</span></label>
+            <div class="slider-row">
+              <input
+                type="range"
+                id="temperature"
+                min="0"
+                max="1"
+                step="0.05"
+                value="0.3"
+                oninput="
+                  document.getElementById('tempDisplay').textContent =
+                    this.value
+                "
+              />
+              <span class="slider-value" id="tempValue">0.3</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="delayBetweenChunks">Độ trễ giữa các đoạn (ms)</label>
+            <input
+              type="number"
+              id="delayBetweenChunks"
+              value="100"
+              min="0"
+              max="5000"
+              step="100"
+            />
+          </div>
+
+          <div class="form-group">
+            <label
+              >⚡ Preset tốc độ
+              <span
+                style="
+                  font-size: 11px;
+                  color: var(--text-muted);
+                  font-weight: 400;
+                "
+                >(áp dụng ngay kể cả khi đang dịch)</span
+              ></label
+            >
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <button
+                class="btn btn-secondary speed-preset-btn"
+                data-speed-preset="turbo"
+                onclick="applySpeedPreset('turbo')"
+                style="flex: 1; padding: 8px 12px; font-size: 13px"
+              >
+                🚀 Turbo
+                <span style="font-size: 11px; color: var(--text-muted)"
+                  >20 song song · 0ms</span
+                >
+              </button>
+              <button
+                class="btn btn-secondary speed-preset-btn"
+                data-speed-preset="balanced"
+                onclick="applySpeedPreset('balanced')"
+                style="flex: 1; padding: 8px 12px; font-size: 13px"
+              >
+                ⚖️ Cân bằng
+                <span style="font-size: 11px; color: var(--text-muted)"
+                  >10 song song · 100ms</span
+                >
+              </button>
+              <button
+                class="btn btn-secondary speed-preset-btn"
+                data-speed-preset="safe"
+                onclick="applySpeedPreset('safe')"
+                style="flex: 1; padding: 8px 12px; font-size: 13px"
+              >
+                🛡️ An toàn
+                <span style="font-size: 11px; color: var(--text-muted)"
+                  >4 song song · 600ms</span
+                >
+              </button>
+              <button
+                class="btn btn-secondary speed-preset-btn"
+                data-speed-preset="economy"
+                onclick="applySpeedPreset('economy')"
+                style="flex: 1; padding: 8px 12px; font-size: 13px"
+              >
+                💰 Tiết kiệm
+                <span style="font-size: 11px; color: var(--text-muted)"
+                  >2 song song · 1200ms</span
+                >
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alert area -->
+        <div class="alert alert-error" id="alertError">
+          <span>⚠️</span>
+          <span id="alertErrorMsg"></span>
+        </div>
+
+        <!-- Start button -->
+        <div class="button-row">
+          <button
+            class="btn btn-primary btn-lg"
+            id="startBtn"
+            onclick="startTranslation()"
+          >
+            <span>🚀</span> Bắt đầu dịch
+          </button>
+          <button
+            class="btn btn-danger"
+            id="stopBtn"
+            onclick="stopTranslation()"
+            style="display: none"
+          >
+            <span>⏹</span> Dừng lại
+          </button>
+        </div>
+
+        <div
+          class="alert alert-success"
+          id="resumePrompt"
+          style="display: none"
+        >
+          <span>🧩</span>
+          <span id="resumePromptText"></span>
+          <button
+            class="btn btn-secondary"
+            style="padding: 6px 10px; font-size: 12px; min-height: auto"
+            onclick="acceptResumeFromCheckpoint()"
+          >
+            Tiếp tục
+          </button>
+          <button
+            class="btn btn-secondary"
+            style="padding: 6px 10px; font-size: 12px; min-height: auto"
+            onclick="ignoreResumeCheckpoint()"
+          >
+            Dịch lại từ đầu
+          </button>
+        </div>
+      </div>
+
+      <div data-mode-section="writing" style="display: none">
+        <!-- Continue Writing Section -->
+        <div class="card" style="margin-top: 20px">
+          <div class="card-title">
+            <span class="icon">✍️</span> Viết tiếp truyện
+          </div>
+          <p
+            style="
+              font-size: 13px;
+              color: var(--text-secondary);
+              margin-bottom: 16px;
+              line-height: 1.6;
+            "
+          >
+            AI sẽ phân tích giọng văn, nhịp truyện, mạch truyện của toàn bộ tác
+            phẩm và viết tiếp từ chương cuối — giữ nguyên phong cách tác giả,
+            không gấp rút, không dồn nén.
+          </p>
+
+          <div class="form-group">
+            <label for="plotDirection"
+              >Hướng phát triển cốt truyện
+              <span
+                style="
+                  font-size: 11px;
+                  color: var(--text-muted);
+                  font-weight: 400;
+                "
+                >(tùy chọn)</span
+              ></label
+            >
+            <textarea
+              id="plotDirection"
+              rows="4"
+              placeholder="Tình tiết: [chuyện gì xảy ra tiếp theo]&#10;Bối cảnh: [ở đâu, khi nào]&#10;Cảm xúc: [nhịp nhanh/chậm, căng thẳng/nhẹ nhàng]&#10;Nhân vật: [ai xuất hiện, ai tương tác]&#10;Lưu ý: [không kết thúc / để mở / có twist...]"
+            ></textarea>
+          </div>
+
+          <div class="writing-settings-grid">
+            <div class="form-group">
+              <label for="writingChunkCount"
+                >Số đoạn viết tiếp
+                <span
+                  style="
+                    font-size: 11px;
+                    color: var(--text-muted);
+                    font-weight: 400;
+                  "
+                  >(1–100, mỗi đoạn ~1500 từ)</span
+                ></label
+              >
+              <input
+                type="number"
+                id="writingChunkCount"
+                value="3"
+                min="1"
+                max="100"
+                step="1"
+              />
+            </div>
+            <div class="form-group">
+              <label
+                >Temperature: <span id="writingTempDisplay">0.7</span></label
+              >
+              <div class="slider-row">
+                <input
+                  type="range"
+                  id="writingTemperature"
+                  min="0.3"
+                  max="1"
+                  step="0.05"
+                  value="0.7"
+                  oninput="
+                    document.getElementById('writingTempDisplay').textContent =
+                      this.value;
+                    document.getElementById('writingTempValue').textContent =
+                      this.value;
+                  "
+                />
+                <span class="slider-value" id="writingTempValue">0.7</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 12px">
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                cursor: pointer;
+                font-size: 14px;
+                color: var(--text-primary);
+              "
+            >
+              <input type="checkbox" id="enableAnalysis" checked />
+              <span>🔍 Phân tích cốt truyện & nhân vật trước khi viết</span>
+            </label>
+            <div
+              style="
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-top: 4px;
+                margin-left: 26px;
+              "
+            >
+              AI sẽ đọc toàn bộ truyện, tóm tắt cốt truyện, nhận diện nhân vật
+              và mối quan hệ. Tốn thêm API calls nhưng cho kết quả viết tiếp
+              chính xác và hay hơn nhiều.
+              <span
+                id="analysisCacheHint"
+                style="color: var(--success); display: none"
+              >
+                ✅ Đã có bản phân tích (sẽ dùng lại)</span
+              >
+            </div>
+          </div>
+
+          <div
+            class="cost-note"
+            id="writingCostEstimate"
+            style="margin-top: 10px"
+          >
+            ⏳ Tải file để xem ước tính token viết tiếp.
+          </div>
+
+          <div class="button-row" style="margin-top: 12px">
+            <button
+              class="btn btn-writing btn-lg"
+              id="startWritingBtn"
+              onclick="startContinueWriting()"
+            >
+              <span>✍️</span> Viết tiếp từ chương cuối
+            </button>
+            <button
+              class="btn btn-danger"
+              id="stopWritingBtn"
+              onclick="stopContinueWriting()"
+              style="display: none"
+            >
+              <span>⏹</span> Dừng viết
+            </button>
+          </div>
+        </div>
+
+        <!-- Writing Result Section -->
+        <div
+          class="writing-section"
+          id="writingResultSection"
+          style="margin-top: 20px"
+        >
+          <div class="card">
+            <div class="writing-result-header">
+              <div class="card-title" style="margin-bottom: 0">
+                <span class="icon">📝</span> Nội dung viết tiếp
+              </div>
+              <button
+                class="btn btn-secondary btn-sm"
+                id="toggleWritingOutputBtn"
+                onclick="toggleWritingOutput()"
+              >
+                Mở nội dung
+              </button>
+            </div>
+
+            <div
+              id="writingChunkIndicator"
+              class="writing-chunk-indicator"
+              style="display: none"
+            >
+              <div
+                class="spinner"
+                style="width: 12px; height: 12px; border-width: 1.5px"
+              ></div>
+              <span id="writingChunkLabel">Đang viết đoạn 1/3...</span>
+            </div>
+
+            <div class="writing-output is-collapsed" id="writingOutput"></div>
+
+            <div style="margin-top: 12px">
+              <div class="format-row">
+                <span
+                  style="
+                    font-size: 12px;
+                    color: var(--text-muted);
+                    font-weight: 500;
+                  "
+                  >Định dạng:</span
+                >
+                <label class="format-option format-option-sm">
+                  <input
+                    type="radio"
+                    name="writingPartialFormat"
+                    value="txt"
+                    checked
+                  />
+                  TXT
+                </label>
+                <label class="format-option format-option-sm">
+                  <input
+                    type="radio"
+                    name="writingPartialFormat"
+                    value="docx"
+                  />
+                  DOCX
+                </label>
+                <label class="format-option format-option-sm">
+                  <input
+                    type="radio"
+                    name="writingPartialFormat"
+                    value="epub"
+                  />
+                  EPUB
+                </label>
+              </div>
+              <button
+                class="btn btn-secondary btn-full"
+                id="downloadWritingPartialBtn"
+                onclick="downloadWritingPartial()"
+                disabled
+              >
+                <span>⬇️</span> Tải xuống đoạn đã viết (<span
+                  id="writingPartialCount"
+                  >0</span
+                >
+                đoạn)
+              </button>
+            </div>
+
+            <div style="margin-top: 16px">
+              <div class="form-group">
+                <label>Định dạng xuất file</label>
+                <div class="format-row format-row-lg">
+                  <label class="format-option">
+                    <input
+                      type="radio"
+                      name="writingExportFormat"
+                      value="txt"
+                      checked
+                    />
+                    <span>📄 TXT</span>
+                  </label>
+                  <label class="format-option">
+                    <input
+                      type="radio"
+                      name="writingExportFormat"
+                      value="docx"
+                    />
+                    <span>📝 DOCX</span>
+                  </label>
+                  <label class="format-option">
+                    <input
+                      type="radio"
+                      name="writingExportFormat"
+                      value="epub"
+                    />
+                    <span>📚 EPUB</span>
+                  </label>
+                </div>
+              </div>
+              <div class="button-row">
+                <button
+                  class="btn btn-success"
+                  id="downloadWritingBtn"
+                  onclick="downloadContinuedContent()"
+                  disabled
+                >
+                  <span>⬇️</span> Tải toàn bộ nội dung viết tiếp
+                </button>
+                <button
+                  class="btn btn-secondary"
+                  onclick="copyContinuedContent()"
+                >
+                  <span>📋</span> Sao chép
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div data-mode-section="history" style="display: none">
+        <!-- History List -->
+        <div class="card">
+          <div class="card-title">
+            <span class="icon">🕘</span> Lịch sử dịch
+          </div>
+          <div
+            id="historyList"
+            style="display: flex; flex-direction: column; gap: 10px"
+          >
+            Chưa có lịch sử dịch.
+          </div>
+        </div>
+      </div>
+
+      <div data-mode-section="translate">
+        <!-- Progress section -->
+        <div
+          class="progress-section"
+          id="progressSection"
+          style="margin-top: 20px"
+        >
+          <div class="card">
+            <div class="card-title">
+              <span class="icon">⏳</span> Tiến trình dịch
+            </div>
+
+            <div class="progress-header">
+              <span class="progress-label" id="progressLabel"
+                >Đang khởi tạo...</span
+              >
+              <span class="progress-stat" id="progressPercent">0%</span>
+            </div>
+
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+
+            <div class="progress-stats">
+              <div class="progress-stat-card">
+                <div class="stat-value" id="statDone">0</div>
+                <div class="stat-label">Đoạn xong</div>
+              </div>
+              <div class="progress-stat-card">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">Tổng đoạn</div>
+              </div>
+              <div class="progress-stat-card">
+                <div class="stat-value" id="statEta">--</div>
+                <div class="stat-label">ETA</div>
+              </div>
+              <div class="progress-stat-card">
+                <div class="stat-value" id="statSpeed">--</div>
+                <div class="stat-label">Tốc độ</div>
+              </div>
+            </div>
+
+            <div class="log-container" id="logContainer"></div>
+
+            <div style="margin-top: 12px">
+              <div class="format-row">
+                <span
+                  style="
+                    font-size: 12px;
+                    color: var(--text-muted);
+                    font-weight: 500;
+                  "
+                  >Định dạng:</span
+                >
+                <label class="format-option format-option-sm">
+                  <input
+                    type="radio"
+                    name="partialFormat"
+                    value="txt"
+                    checked
+                  />
+                  TXT
+                </label>
+                <label class="format-option format-option-sm">
+                  <input type="radio" name="partialFormat" value="docx" /> DOCX
+                </label>
+                <label class="format-option format-option-sm">
+                  <input type="radio" name="partialFormat" value="epub" /> EPUB
+                </label>
+              </div>
+              <button
+                class="btn btn-secondary btn-full"
+                id="downloadPartialBtn"
+                onclick="downloadPartial()"
+                disabled
+              >
+                <span>⬇️</span> Tải xuống các đoạn đã dịch (<span
+                  id="downloadPartialCount"
+                  >0</span
+                >
+                đoạn)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Result section -->
+        <div class="result-section" id="resultSection" style="margin-top: 20px">
+          <div class="card">
+            <div class="card-title">
+              <span class="icon">✅</span> Kết quả dịch
+            </div>
+
+            <div
+              class="alert alert-success visible"
+              style="margin-bottom: 16px"
+            >
+              <span>🎉</span>
+              <span id="resultSummary">Dịch hoàn tất!</span>
+            </div>
+
+            <div class="form-group">
+              <label>Xem trước (500 ký tự đầu)</label>
+              <div class="result-preview" id="resultPreview"></div>
+              <div class="preview-actions">
+                <button
+                  class="btn btn-secondary"
+                  id="togglePreviewBtn"
+                  onclick="toggleFullPreview()"
+                  style="padding: 8px 12px; font-size: 12px"
+                >
+                  Mở rộng xem trước
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Định dạng xuất file</label>
+              <div class="format-row format-row-lg">
+                <label class="format-option">
+                  <input type="radio" name="exportFormat" value="txt" checked />
+                  <span>📄 TXT</span>
+                  <span style="font-size: 11px; color: var(--text-muted)"
+                    >— đơn giản, nhẹ</span
+                  >
+                </label>
+                <label class="format-option">
+                  <input type="radio" name="exportFormat" value="docx" />
+                  <span>📝 DOCX</span>
+                  <span style="font-size: 11px; color: var(--text-muted)"
+                    >— Word, có định dạng</span
+                  >
+                </label>
+                <label class="format-option">
+                  <input type="radio" name="exportFormat" value="epub" />
+                  <span>📚 EPUB</span>
+                  <span style="font-size: 11px; color: var(--text-muted)"
+                    >— ebook, đọc trên Kindle/Phone</span
+                  >
+                </label>
+              </div>
+            </div>
+
+            <div class="button-row">
+              <button class="btn btn-success" onclick="downloadResult()">
+                <span>⬇️</span> Tải file đã dịch
+              </button>
+              <button class="btn btn-secondary" onclick="copyResult()">
+                <span>📋</span> Sao chép
+              </button>
+              <button class="btn btn-secondary" onclick="resetAll()">
+                <span>🔄</span> Dịch file mới
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        Trình Dịch Truyện AI · Dữ liệu xử lý hoàn toàn trên trình duyệt của bạn
+        · API key không được lưu trữ
+      </div>
+    </div>
+
+    <div id="cloudToast" class="cloud-toast"></div>
