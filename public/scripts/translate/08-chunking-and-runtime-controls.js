@@ -12,9 +12,19 @@ function ignoreResumeCheckpoint() {
   addLog("↺ Bỏ qua checkpoint cũ, sẽ dịch lại từ đầu.", "info");
 }
 
-function persistCurrentTranslationCheckpoint() {
+function persistCurrentTranslationCheckpoint(force) {
   if (!currentFileHash || !translatedChunks || translatedChunks.length === 0)
     return;
+  const now = Date.now();
+  const doneCount = translatedChunks.filter(Boolean).length;
+  const shouldForce = Boolean(force);
+  const tooSoon = now - lastLocalCheckpointSavedAt < 2500;
+  const noSignificantProgress = doneCount - lastLocalCheckpointDoneCount < 3;
+  if (!shouldForce && tooSoon && noSignificantProgress) return;
+
+  lastLocalCheckpointSavedAt = now;
+  lastLocalCheckpointDoneCount = doneCount;
+
   const modelName = getSelectedModel();
   const provider = getActiveProvider();
   const chunkSize =

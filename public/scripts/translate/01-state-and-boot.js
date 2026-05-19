@@ -30,6 +30,8 @@ let isProviderTabsCollapsed = false;
 let usageStats = { promptTokens: 0, completionTokens: 0, totalCost: 0 };
 let pendingResumeCheckpoint = null;
 let activeAppMode = "translate";
+let lastLocalCheckpointSavedAt = 0;
+let lastLocalCheckpointDoneCount = 0;
 const TRANSLATION_CHECKPOINT_PREFIX = "translation_checkpoint_v1:";
 const TRANSLATION_HISTORY_KEY = "translation_history_v1";
 let currentFirebaseUser = null;
@@ -223,4 +225,3 @@ window.addEventListener("focus", function () {
     requestWakeLock("window-focus");
   }
 });
-

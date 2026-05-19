@@ -74,10 +74,11 @@ async function processChunksWithConcurrency(chunks, options) {
             `▶ Đang dịch đoạn ${currentIndex + 1}/${chunks.length}...`,
             "info",
           );
+          const maxRetries = isSpeedOptimizedMode() ? 2 : 3;
           const translatedText = await translateChunkWithRetry(
             chunk,
             currentIndex,
-            3,
+            maxRetries,
             chunkHash,
             glossaryInstruction,
           );
@@ -149,4 +150,3 @@ async function processChunksWithConcurrency(chunks, options) {
     schedule();
   });
 }
-

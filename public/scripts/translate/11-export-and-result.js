@@ -1,10 +1,10 @@
 const SPEED_PRESETS = {
-  turbo: { concurrent: 20, delay: 0, chunkSize: 8000, temperature: 0.3 },
-  balanced: { concurrent: 10, delay: 100, chunkSize: 6000, temperature: 0.3 },
+  turbo: { concurrent: 30, delay: 0, chunkSize: 12000, temperature: 0.2 },
+  balanced: { concurrent: 12, delay: 50, chunkSize: 8000, temperature: 0.25 },
   safe: { concurrent: 4, delay: 600, chunkSize: 5000, temperature: 0.2 },
   economy: { concurrent: 2, delay: 1200, chunkSize: 6000, temperature: 0.2 },
 };
-const DEFAULT_SPEED_PRESET = "balanced";
+const DEFAULT_SPEED_PRESET = "turbo";
 
 function markActiveSpeedPreset(preset, animate) {
   const buttons = document.querySelectorAll(
@@ -272,4 +272,3 @@ function triggerDownload(blob, fileName) {
   link.click();
   URL.revokeObjectURL(url);
 }
-

@@ -147,13 +147,23 @@ async function translateChunkWithRetry(
         provider === "ollama"
           ? responseData?.message?.content || ""
           : extractAssistantText(responseData);
-      const translatedText = postProcessTranslationOutput(rawOutput, currentChunk);
+      const translatedText = postProcessTranslationOutput(
+        rawOutput,
+        currentChunk,
+        strictRetryMode,
+      );
 
       if (!translatedText) {
         throw new Error("Phản hồi API không hợp lệ");
       }
 
-      if (hasSevereSourceEcho(translatedText, currentChunk)) {
+      const shouldRunStrictQualityGate =
+        strictRetryMode || !isSpeedOptimizedMode();
+
+      if (
+        shouldRunStrictQualityGate &&
+        hasSevereSourceEcho(translatedText, currentChunk)
+      ) {
         if (attempt < maxRetries) {
           strictRetryMode = true;
           addLog(
@@ -166,7 +176,10 @@ async function translateChunkWithRetry(
         throw new Error("Model trả về lẫn bản gốc, không thể dùng kết quả này");
       }
 
-      if (hasSevereRepetition(translatedText)) {
+      if (
+        shouldRunStrictQualityGate &&
+        hasSevereRepetition(translatedText)
+      ) {
         if (attempt < maxRetries) {
           strictRetryMode = true;
           addLog(

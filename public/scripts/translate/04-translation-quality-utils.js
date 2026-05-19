@@ -17,7 +17,17 @@ function toComparableText(text) {
     .trim();
 }
 
+function isSpeedOptimizedMode() {
+  const runtimeFastMode = getRuntimeConfig()?.preferFastTranslation;
+  if (typeof runtimeFastMode === "boolean") return runtimeFastMode;
+  return true;
+}
+
 function buildTranslationUserPrompt(chunkText, strictMode) {
+  if (!strictMode && isSpeedOptimizedMode()) {
+    return `Dịch sang tiếng Việt tự nhiên, giữ ý và xuống dòng, chỉ trả về bản dịch:\n\n${chunkText}`;
+  }
+
   return `Dịch chính xác đoạn sau sang tiếng Việt tự nhiên.
 
 Yêu cầu bắt buộc:
@@ -164,8 +174,11 @@ function buildFinalTextFromChunks(chunks) {
   return normalizeTranslatedChunks(chunks).join("\n\n");
 }
 
-function postProcessTranslationOutput(rawText, sourceChunk) {
+function postProcessTranslationOutput(rawText, sourceChunk, strictMode) {
   const tagged = extractTaggedTranslation(rawText);
+  if (!strictMode && isSpeedOptimizedMode()) {
+    return normalizePunctuationSpacing(tagged);
+  }
   const noSourceEcho = stripLeadingSourceEcho(tagged, sourceChunk);
   const noRepeat = dedupeConsecutiveParagraphs(noSourceEcho);
   return normalizePunctuationSpacing(noRepeat);
@@ -375,4 +388,3 @@ function applyTranslationScope(chunks) {
   const scopedCount = Math.max(1, Math.ceil(chunks.length * (scope / 100)));
   return chunks.slice(0, scopedCount);
 }
-

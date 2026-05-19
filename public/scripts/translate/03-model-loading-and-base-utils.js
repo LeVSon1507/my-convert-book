@@ -324,7 +324,7 @@ function getOptimalChunkSize(model) {
   // Reserve generous room for prompt + output, use ~15% context for one chunk
   const optimal = Math.floor(limit * 0.15);
   // Allow larger chunks to reduce request count and repeated prompt tokens
-  return Math.max(2000, Math.min(optimal, 12000));
+  return Math.max(3000, Math.min(optimal, 16000));
 }
 
 function getModelPricing(model) {
