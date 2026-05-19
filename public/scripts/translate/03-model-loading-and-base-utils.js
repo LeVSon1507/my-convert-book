@@ -6,7 +6,12 @@ function formatHuggingFaceModelLabel(modelId) {
   });
 }
 
+function isSao10KHuggingFaceModelId(modelId) {
+  return String(modelId || "").toLowerCase().includes("sao10k/");
+}
+
 function isPreferredHuggingFaceModelId(modelId) {
+  if (isSao10KHuggingFaceModelId(modelId)) return true;
   const id = String(modelId || "").toLowerCase();
   return (
     id.includes("dolphin") ||
@@ -17,6 +22,18 @@ function isPreferredHuggingFaceModelId(modelId) {
 
 function getHuggingFaceFallbackModels() {
   return [
+    {
+      id: "Sao10K/L3-8B-Stheno-v3.2",
+      label: "Sao10K L3 8B Stheno v3.2 — default",
+    },
+    {
+      id: "Sao10K/L3-70B-Euryale-v2.1",
+      label: "Sao10K L3 70B Euryale v2.1",
+    },
+    {
+      id: "Sao10K/L3-8B-Lunaris-v1",
+      label: "Sao10K L3 8B Lunaris v1",
+    },
     {
       id: "Qwen/Qwen2.5-7B-Instruct",
       label: "Qwen 2.5 7B Instruct — fallback",
@@ -66,16 +83,19 @@ async function ensureHuggingFaceModelsLoaded(force) {
         const providerCount = Array.isArray(item?.providers)
           ? item.providers.length
           : 0;
+        const isSao10k = isSao10KHuggingFaceModelId(id);
         const preferred = isPreferredHuggingFaceModelId(id);
         return {
           id: id,
-          label: `${formatHuggingFaceModelLabel(id)}${preferred ? " ⭐ uncensor" : ""}${providerCount ? ` · ${providerCount} provider` : ""}`,
+          label: `${formatHuggingFaceModelLabel(id)}${isSao10k ? " ⭐ Sao10K" : preferred ? " ⭐ uncensor" : ""}${providerCount ? ` · ${providerCount} provider` : ""}`,
           providerCount: providerCount,
           preferred: preferred,
+          isSao10k: isSao10k,
         };
       })
       .filter(Boolean)
       .sort(function (a, b) {
+        if (a.isSao10k !== b.isSao10k) return a.isSao10k ? -1 : 1;
         if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
         if (b.providerCount !== a.providerCount)
           return b.providerCount - a.providerCount;
@@ -93,10 +113,15 @@ async function ensureHuggingFaceModelsLoaded(force) {
         { id: "__custom__", label: "✏️ Nhập model ID..." },
       ]);
       const currentDefault = PROVIDER_CONFIGS.huggingface.defaultModel;
+      const sao10kDefault = huggingFaceModels.find(function (m) {
+        return isSao10KHuggingFaceModelId(m.id);
+      });
       const preferredDefault = huggingFaceModels.find(function (m) {
         return isPreferredHuggingFaceModelId(m.id);
       });
-      const safeDefault = preferredDefault
+      const safeDefault = sao10kDefault
+        ? sao10kDefault.id
+        : preferredDefault
         ? preferredDefault.id
         : huggingFaceModels[0].id;
       if (

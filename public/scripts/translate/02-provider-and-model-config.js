@@ -120,9 +120,21 @@ const PROVIDER_CONFIGS = {
   },
   huggingface: {
     baseUrl: "https://router.huggingface.co/v1",
-    defaultModel: "Qwen/Qwen2.5-7B-Instruct",
+    defaultModel: "Sao10K/L3-8B-Stheno-v3.2",
     hint: "Nhập Hugging Face token dạng hf_... App sẽ tự nạp model khả dụng theo key này.",
     models: [
+      {
+        id: "Sao10K/L3-8B-Stheno-v3.2",
+        label: "Sao10K L3 8B Stheno v3.2 — default",
+      },
+      {
+        id: "Sao10K/L3-70B-Euryale-v2.1",
+        label: "Sao10K L3 70B Euryale v2.1",
+      },
+      {
+        id: "Sao10K/L3-8B-Lunaris-v1",
+        label: "Sao10K L3 8B Lunaris v1",
+      },
       {
         id: "Qwen/Qwen2.5-7B-Instruct",
         label: "Qwen 2.5 7B Instruct — fallback",
@@ -164,6 +176,9 @@ const MODEL_CONTEXT_LIMITS = {
   "x-ai/grok-4-fast": 2000000,
   "x-ai/grok-4.20": 1000000,
   // Hugging Face dynamic model list (fallback context limits)
+  "Sao10K/L3-8B-Stheno-v3.2": 128000,
+  "Sao10K/L3-70B-Euryale-v2.1": 128000,
+  "Sao10K/L3-8B-Lunaris-v1": 128000,
   "Qwen/Qwen2.5-7B-Instruct": 128000,
   "meta-llama/Llama-3.1-8B-Instruct": 128000,
   "google/gemma-4-31B-it": 128000,
@@ -202,6 +217,9 @@ const MODEL_PRICING = {
   "x-ai/grok-4.1-fast": { input: 0.2, output: 0.5 },
   "x-ai/grok-4-fast": { input: 0.2, output: 0.5 },
   // Hugging Face routing varies by provider/hardware; conservative placeholders.
+  "Sao10K/L3-8B-Stheno-v3.2": { input: 0.15, output: 0.45 },
+  "Sao10K/L3-70B-Euryale-v2.1": { input: 0.25, output: 0.8 },
+  "Sao10K/L3-8B-Lunaris-v1": { input: 0.15, output: 0.45 },
   "Qwen/Qwen2.5-7B-Instruct": { input: 0.1, output: 0.3 },
   "meta-llama/Llama-3.1-8B-Instruct": { input: 0.12, output: 0.35 },
   "google/gemma-4-31B-it": { input: 0.2, output: 0.6 },
@@ -255,4 +273,3 @@ async function ensureOpenRouterPricingLoaded() {
 
   return openRouterPricingMap;
 }
-
