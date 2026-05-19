@@ -828,9 +828,261 @@ function normalizeTranslatedText(text) {
   return output.trim();
 }
 
+function toComparableText(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00C0-\u024F\u1E00-\u1EFF]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildTranslationUserPrompt(chunkText, strictMode) {
+  return `Dịch chính xác đoạn sau sang tiếng Việt tự nhiên.
+
+Yêu cầu bắt buộc:
+- Không được bỏ sót ý.
+- Không được lặp câu/lặp đoạn.
+- Không chép lại văn bản gốc tiếng Anh/Trung (chỉ trả về tiếng Việt).
+- Giữ cấu trúc xuống dòng gần bản gốc.
+- Chỉnh dấu câu cho tự nhiên tiếng Việt.
+- Không thêm giải thích.
+${strictMode ? "- Nếu còn nghi ngờ, ưu tiên dịch ngắn gọn đúng nghĩa thay vì lặp lại.\n" : ""}Trả về đúng định dạng:
+<vi_translation>
+[bản dịch]
+</vi_translation>
+
+Đoạn cần dịch:
+${chunkText}`;
+}
+
+function extractTaggedTranslation(text) {
+  const normalized = normalizeTranslatedText(text);
+  const tagged = normalized.match(
+    /<vi_translation>\s*([\s\S]*?)\s*<\/vi_translation>/i,
+  );
+  if (tagged && tagged[1]) return tagged[1].trim();
+  return normalized;
+}
+
+function splitParagraphs(text) {
+  return String(text || "")
+    .split(/\n{2,}/)
+    .map(function (part) {
+      return part.trim();
+    })
+    .filter(Boolean);
+}
+
+function stripLeadingSourceEcho(translatedText, sourceChunk) {
+  const outputParagraphs = splitParagraphs(translatedText);
+  if (!outputParagraphs.length) return translatedText;
+
+  const sourceSet = new Set(
+    splitParagraphs(sourceChunk).map(function (part) {
+      return toComparableText(part);
+    }),
+  );
+
+  let leadingEchoCount = 0;
+  while (leadingEchoCount < outputParagraphs.length) {
+    const probe = toComparableText(outputParagraphs[leadingEchoCount]);
+    if (!probe || probe.length < 30 || !sourceSet.has(probe)) break;
+    leadingEchoCount++;
+  }
+
+  if (
+    leadingEchoCount > 0 &&
+    leadingEchoCount < outputParagraphs.length
+  ) {
+    return outputParagraphs.slice(leadingEchoCount).join("\n\n");
+  }
+
+  return translatedText;
+}
+
+function dedupeConsecutiveParagraphs(text) {
+  const paragraphs = splitParagraphs(text);
+  if (paragraphs.length <= 1) return String(text || "").trim();
+
+  const deduped = [];
+  paragraphs.forEach(function (paragraph) {
+    const current = toComparableText(paragraph);
+    if (!current) return;
+
+    const previousParagraph = deduped[deduped.length - 1];
+    const previous = toComparableText(previousParagraph);
+    const isExactDuplicate = current === previous;
+    const isNearDuplicate =
+      current.length > 40 &&
+      previous.length > 40 &&
+      (current.includes(previous) || previous.includes(current));
+
+    if (!isExactDuplicate && !isNearDuplicate) {
+      deduped.push(paragraph);
+    }
+  });
+
+  return deduped.join("\n\n").trim();
+}
+
+function normalizePunctuationSpacing(text) {
+  return String(text || "")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/([,;:!?])(?![\s\n"'”’)\]}»])/g, "$1 ")
+    .replace(/([.])(?![.\s\n"'”’)\]}»])/g, "$1 ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function normalizeTranslatedChunks(chunks) {
+  const normalizedChunks = [];
+
+  (chunks || []).forEach(function (chunkText) {
+    if (typeof chunkText !== "string") return;
+    const cleaned = normalizePunctuationSpacing(chunkText);
+    if (!cleaned) return;
+
+    if (normalizedChunks.length === 0) {
+      normalizedChunks.push(cleaned);
+      return;
+    }
+
+    const previousChunk = normalizedChunks[normalizedChunks.length - 1];
+    const previousParagraphs = splitParagraphs(previousChunk);
+    const currentParagraphs = splitParagraphs(cleaned);
+
+    if (previousParagraphs.length && currentParagraphs.length) {
+      const previousTail = toComparableText(
+        previousParagraphs[previousParagraphs.length - 1],
+      );
+
+      while (currentParagraphs.length > 0) {
+        const currentHead = toComparableText(currentParagraphs[0]);
+        if (
+          previousTail &&
+          currentHead &&
+          currentHead.length > 20 &&
+          currentHead === previousTail
+        ) {
+          currentParagraphs.shift();
+          continue;
+        }
+        break;
+      }
+    }
+
+    const mergedCurrent = currentParagraphs.join("\n\n").trim();
+    if (mergedCurrent) normalizedChunks.push(mergedCurrent);
+  });
+
+  return normalizedChunks;
+}
+
+function buildFinalTextFromChunks(chunks) {
+  return normalizeTranslatedChunks(chunks).join("\n\n");
+}
+
+function postProcessTranslationOutput(rawText, sourceChunk) {
+  const tagged = extractTaggedTranslation(rawText);
+  const noSourceEcho = stripLeadingSourceEcho(tagged, sourceChunk);
+  const noRepeat = dedupeConsecutiveParagraphs(noSourceEcho);
+  return normalizePunctuationSpacing(noRepeat);
+}
+
+function hasSevereSourceEcho(translatedText, sourceChunk) {
+  const outputComparable = toComparableText(translatedText);
+  const sourceComparable = toComparableText(sourceChunk);
+  if (!outputComparable || !sourceComparable) return false;
+
+  const prefixProbeLength = Math.min(180, sourceComparable.length);
+  if (prefixProbeLength >= 120) {
+    const probe = sourceComparable.slice(0, prefixProbeLength);
+    if (outputComparable.startsWith(probe)) return true;
+  }
+
+  const sourceLines = String(sourceChunk || "")
+    .split(/\n+/)
+    .map(function (line) {
+      return toComparableText(line);
+    })
+    .filter(function (line) {
+      return line.length > 25;
+    });
+  if (!sourceLines.length) return false;
+
+  const sourceSet = new Set(sourceLines);
+  const outputLines = String(translatedText || "")
+    .split(/\n+/)
+    .map(function (line) {
+      return toComparableText(line);
+    })
+    .filter(function (line) {
+      return line.length > 25;
+    });
+  if (!outputLines.length) return false;
+
+  const overlapCount = outputLines.filter(function (line) {
+    return sourceSet.has(line);
+  }).length;
+  return overlapCount >= 2 && overlapCount / outputLines.length > 0.45;
+}
+
+function hasSevereRepetition(translatedText) {
+  const paragraphs = splitParagraphs(translatedText)
+    .map(function (paragraph) {
+      return toComparableText(paragraph);
+    })
+    .filter(function (paragraph) {
+      return paragraph.length > 20;
+    });
+  if (paragraphs.length < 3) return false;
+
+  const countMap = new Map();
+  paragraphs.forEach(function (paragraph) {
+    countMap.set(paragraph, (countMap.get(paragraph) || 0) + 1);
+  });
+
+  const duplicateCount = Array.from(countMap.values()).filter(function (count) {
+    return count > 1;
+  }).length;
+  const highestRepeat = Math.max.apply(
+    null,
+    Array.from(countMap.values()),
+  );
+
+  if (highestRepeat >= 3) return true;
+  return duplicateCount / paragraphs.length > 0.35;
+}
+
+function splitChunkForContextRetry(chunkText) {
+  const text = String(chunkText || "");
+  if (text.length < 1200) return null;
+
+  const midpoint = Math.floor(text.length / 2);
+  const candidateBreaks = [
+    text.lastIndexOf("\n\n", midpoint),
+    text.lastIndexOf(". ", midpoint),
+    text.lastIndexOf("\n", midpoint),
+  ];
+  let splitPos = candidateBreaks.find(function (position) {
+    return position > text.length * 0.25;
+  });
+  if (!splitPos || splitPos <= 0) splitPos = midpoint;
+
+  const rightStart =
+    text[splitPos] === "\n" ? splitPos + 1 : text[splitPos + 1] === " " ? splitPos + 2 : splitPos;
+  const left = text.slice(0, splitPos).trim();
+  const right = text.slice(rightStart).trim();
+
+  if (!left || !right) return null;
+  return [left, right];
+}
+
 // Caching system using localStorage
 const CACHE_PREFIX = "translator_cache_";
-const CACHE_VERSION = "1";
+const CACHE_VERSION = "2";
 const STORY_ANALYSIS_CACHE_PREFIX = "story_analysis_cache_v1:";
 
 function getCacheKey(chunkHash, model, provider) {
@@ -970,8 +1222,7 @@ function updateCostEstimation() {
 
   const promptOverheadChars =
     (systemPrompt + glossaryInstruction).length +
-    "Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n"
-      .length;
+    buildTranslationUserPrompt("[CHUNK]", false).length;
   const retryBufferFactor = 1.08;
   const outputExpansionFactor = 1.1;
 
@@ -2127,6 +2378,7 @@ async function translateChunkWithRetry(
 
   const url = `${baseUrl}/chat/completions`;
   let currentChunk = chunk;
+  let strictRetryMode = false;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -2152,13 +2404,18 @@ async function translateChunkWithRetry(
               keep_alive: "30m",
               options: {
                 temperature: temperature,
+                top_p: 0.9,
+                repeat_penalty: strictRetryMode ? 1.18 : 1.12,
                 num_predict: getMaxTokensForTranslation(currentChunk),
               },
               messages: [
                 { role: "system", content: systemPrompt },
                 {
                   role: "user",
-                  content: `Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n${currentChunk}`,
+                  content: buildTranslationUserPrompt(
+                    currentChunk,
+                    strictRetryMode,
+                  ),
                 },
               ],
             }),
@@ -2174,12 +2431,17 @@ async function translateChunkWithRetry(
             body: JSON.stringify({
               model: modelName,
               temperature: temperature,
+              frequency_penalty: strictRetryMode ? 0.4 : 0.2,
+              presence_penalty: 0,
               max_tokens: getMaxTokensForTranslation(currentChunk),
               messages: [
                 { role: "system", content: systemPrompt },
                 {
                   role: "user",
-                  content: `Dịch sang tiếng Việt, giữ nguyên format xuống dòng. Chỉ trả về bản dịch:\n\n${currentChunk}`,
+                  content: buildTranslationUserPrompt(
+                    currentChunk,
+                    strictRetryMode,
+                  ),
                 },
               ],
             }),
@@ -2247,13 +2509,39 @@ async function translateChunkWithRetry(
 
       const responseData = await response.json();
       recordUsageFromResponse(responseData);
-      const translatedText =
+      const rawOutput =
         provider === "ollama"
-          ? normalizeTranslatedText(responseData?.message?.content || "")
-          : normalizeTranslatedText(extractAssistantText(responseData));
+          ? responseData?.message?.content || ""
+          : extractAssistantText(responseData);
+      const translatedText = postProcessTranslationOutput(rawOutput, currentChunk);
 
       if (!translatedText) {
         throw new Error("Phản hồi API không hợp lệ");
+      }
+
+      if (hasSevereSourceEcho(translatedText, currentChunk)) {
+        if (attempt < maxRetries) {
+          strictRetryMode = true;
+          addLog(
+            `  ⚠ Đoạn ${chunkIndex + 1}: model trả lẫn bản gốc, retry chế độ nghiêm ngặt...`,
+            "warning",
+          );
+          await sleep(600 * attempt);
+          continue;
+        }
+        throw new Error("Model trả về lẫn bản gốc, không thể dùng kết quả này");
+      }
+
+      if (hasSevereRepetition(translatedText)) {
+        if (attempt < maxRetries) {
+          strictRetryMode = true;
+          addLog(
+            `  ⚠ Đoạn ${chunkIndex + 1}: phát hiện lặp câu/đoạn, retry chế độ nghiêm ngặt...`,
+            "warning",
+          );
+          await sleep(500 * attempt);
+          continue;
+        }
       }
 
       // Cache the successful translation
@@ -2292,17 +2580,28 @@ async function translateChunkWithRetry(
         currentChunk.length > 1000 &&
         attempt < maxRetries
       ) {
-        // Trim chunk by 20% and retry
-        const originalLength = currentChunk.length;
-        currentChunk = currentChunk.slice(
-          0,
-          Math.floor(currentChunk.length * 0.8),
-        );
-        addLog(
-          `  ⚠ Đoạn ${chunkIndex + 1}: Context quá dài (${originalLength}→${currentChunk.length}), thử lại...`,
-          "warning",
-        );
-        continue;
+        const splitPair = splitChunkForContextRetry(currentChunk);
+        if (splitPair) {
+          addLog(
+            `  ⚠ Đoạn ${chunkIndex + 1}: Context quá dài, tách đôi đoạn để dịch lại...`,
+            "warning",
+          );
+          const leftResult = await translateChunkWithRetry(
+            splitPair[0],
+            chunkIndex,
+            2,
+            null,
+            glossaryInstruction,
+          );
+          const rightResult = await translateChunkWithRetry(
+            splitPair[1],
+            chunkIndex,
+            2,
+            null,
+            glossaryInstruction,
+          );
+          return [leftResult, rightResult].filter(Boolean).join("\n");
+        }
       }
 
       if (translationError.code === "request_timeout" && attempt < maxRetries) {
@@ -2752,7 +3051,7 @@ async function startTranslation() {
           scopePercent,
         );
         updateLocalProgressHistoryEntry("completed");
-        const _finalText = translatedChunks.join("\n\n");
+        const _finalText = buildFinalTextFromChunks(translatedChunks);
         if (
           currentFirebaseUser &&
           typeof cloudSaveTranslationProgress === "function"
@@ -2941,14 +3240,15 @@ function downloadResult() {
 }
 
 async function exportAs(chunks, baseName, format) {
-  const fullText = chunks.join("\n\n");
+  const normalizedChunks = normalizeTranslatedChunks(chunks);
+  const fullText = normalizedChunks.join("\n\n");
   const title = baseName.replace(/_vietnamese$/, "").replaceAll("_", " ");
 
   if (format === "docx") {
-    return exportAsDocx(chunks, baseName, title);
+    return exportAsDocx(normalizedChunks, baseName, title);
   }
   if (format === "epub") {
-    return exportAsEpub(chunks, baseName, title);
+    return exportAsEpub(normalizedChunks, baseName, title);
   }
   return exportAsTxt(fullText, baseName);
 }
@@ -3072,7 +3372,7 @@ function triggerDownload(blob, fileName) {
 }
 
 async function copyResult() {
-  const translatedText = translatedChunks.join("\n\n");
+  const translatedText = buildFinalTextFromChunks(translatedChunks);
   try {
     await navigator.clipboard.writeText(translatedText);
     addLog("📋 Đã sao chép vào clipboard", "success");
