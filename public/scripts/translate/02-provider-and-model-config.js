@@ -18,6 +18,14 @@ const OPENROUTER_MODEL_GROUPS = {
         id: "mistralai/mistral-small-creative",
         label: "Mistral Small Creative — truyện/roleplay",
       },
+      {
+        id: "thedrummer/cydonia-24b-v4.1",
+        label: "Cydonia 24B v4.1 — hội thoại sáng tạo",
+      },
+      {
+        id: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        label: "Dolphin Mistral 24B Venice (free)",
+      },
       { id: "__custom__", label: "✏️ Nhập model ID..." },
     ],
   },
@@ -33,6 +41,14 @@ const OPENROUTER_MODEL_GROUPS = {
       {
         id: "x-ai/grok-4.20-multi-agent",
         label: "Grok 4.20 Multi-Agent — nghiên cứu sâu",
+      },
+      {
+        id: "thedrummer/cydonia-24b-v4.1",
+        label: "Cydonia 24B v4.1 — hội thoại sáng tạo",
+      },
+      {
+        id: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        label: "Dolphin Mistral 24B Venice (free)",
       },
       { id: "__custom__", label: "✏️ Nhập model ID..." },
     ],
@@ -184,6 +200,8 @@ const MODEL_CONTEXT_LIMITS = {
   "mistralai/mistral-nemo": 128000,
   "mistralai/mistral-large-3-2512": 262000,
   "mistralai/mistral-small-creative": 128000,
+  "thedrummer/cydonia-24b-v4.1": 128000,
+  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": 128000,
   "x-ai/grok-build-0.1": 256000,
   "x-ai/grok-4.3": 1000000,
   "x-ai/grok-4.20": 2000000,
@@ -225,6 +243,11 @@ const MODEL_PRICING = {
   "mistralai/mistral-nemo": { input: 0.02, output: 0.04 },
   "mistralai/mistral-large-3-2512": { input: 0.5, output: 1.5 },
   "mistralai/mistral-small-creative": { input: 0.1, output: 0.3 },
+  "thedrummer/cydonia-24b-v4.1": { input: 0.5, output: 1.0 },
+  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
+    input: 0,
+    output: 0,
+  },
   "x-ai/grok-build-0.1": { input: 1.0, output: 2.0 },
   "x-ai/grok-4.3": { input: 1.25, output: 2.5 },
   "x-ai/grok-4.20": { input: 1.25, output: 2.5 },

@@ -2,11 +2,105 @@
     // Text is split into 600K-char chunks stored in subcollection to stay under 1MB/doc limit.
     const FIRESTORE_CHUNK_SIZE = 600000;
     const CLOUD_PROGRESS_PREFIX = 'progress_';
+    const CUSTOM_MODELS_DOC = 'custom_models';
+    const MAX_CUSTOM_MODELS_PER_PROVIDER = 30;
 
     let _fbAuth = null;
     let _fbDb = null;
     let lastCloudProgressSavedAt = 0;
     let headerAuthPanelOpen = false;
+    let accountCustomModelsByProvider = {};
+
+    function normalizeCustomModelId(value) {
+      return String(value || '').trim();
+    }
+
+    function normalizeCustomModelList(values) {
+      const seen = new Set();
+      const normalized = [];
+      (Array.isArray(values) ? values : []).forEach(function(item) {
+        const modelId = normalizeCustomModelId(item);
+        if (!modelId || modelId === '__custom__' || seen.has(modelId)) return;
+        seen.add(modelId);
+        normalized.push(modelId);
+      });
+      return normalized.slice(0, MAX_CUSTOM_MODELS_PER_PROVIDER);
+    }
+
+    function getAccountCustomModelsForProvider(provider) {
+      if (!provider) return [];
+      const list = accountCustomModelsByProvider[provider];
+      return Array.isArray(list) ? list.slice() : [];
+    }
+
+    async function loadAccountCustomModels() {
+      if (!currentFirebaseUser || !_fbDb) {
+        accountCustomModelsByProvider = {};
+        return {};
+      }
+      try {
+        const uid = currentFirebaseUser.uid;
+        const snap = await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc(CUSTOM_MODELS_DOC)
+          .get();
+        if (!snap.exists) {
+          accountCustomModelsByProvider = {};
+          return {};
+        }
+        const data = snap.data() || {};
+        const next = {};
+        Object.keys(data).forEach(function(key) {
+          if (key === 'updatedAt') return;
+          const values = normalizeCustomModelList(data[key]);
+          if (values.length > 0) next[key] = values;
+        });
+        accountCustomModelsByProvider = next;
+        return next;
+      } catch (e) {
+        console.error('Cloud load custom models error:', e);
+        return accountCustomModelsByProvider;
+      }
+    }
+
+    async function rememberCustomModelForAccount(provider, modelId) {
+      const safeProvider = String(provider || '').trim();
+      const safeModelId = normalizeCustomModelId(modelId);
+      if (!safeProvider || !safeModelId || safeModelId === '__custom__') {
+        return false;
+      }
+
+      const existingList = getAccountCustomModelsForProvider(safeProvider);
+      const nextList = [safeModelId]
+        .concat(existingList.filter(function(item) {
+          return item !== safeModelId;
+        }))
+        .slice(0, MAX_CUSTOM_MODELS_PER_PROVIDER);
+      accountCustomModelsByProvider[safeProvider] = nextList;
+
+      if (!currentFirebaseUser || !_fbDb) return false;
+      try {
+        const uid = currentFirebaseUser.uid;
+        await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc(CUSTOM_MODELS_DOC)
+          .set(
+            {
+              [safeProvider]: nextList,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+          );
+        return true;
+      } catch (e) {
+        console.error('Cloud save custom model error:', e);
+        return false;
+      }
+    }
 
     function initFirebase() {
       const config = globalThis.FIREBASE_CONFIG;
@@ -15,9 +109,24 @@
         if (!firebase.apps.length) firebase.initializeApp(config);
         _fbAuth = firebase.auth();
         _fbDb = firebase.firestore();
-        _fbAuth.onAuthStateChanged(function(user) {
+        _fbAuth.onAuthStateChanged(async function(user) {
           currentFirebaseUser = user;
+          if (user) {
+            await loadAccountCustomModels();
+          } else {
+            accountCustomModelsByProvider = {};
+          }
           updateAuthUI();
+          if (typeof buildModelDropdown === 'function' && typeof getActiveProvider === 'function') {
+            const provider = getActiveProvider();
+            if (
+              provider &&
+              typeof PROVIDER_CONFIGS !== 'undefined' &&
+              PROVIDER_CONFIGS[provider]
+            ) {
+              buildModelDropdown(provider);
+            }
+          }
           if (user) loadCloudHistory();
           else { cloudHistory = []; renderTranslationHistory(); }
         });

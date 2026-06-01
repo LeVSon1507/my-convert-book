@@ -198,6 +198,13 @@ function updateWritingCostEstimation() {
 function buildModelDropdown(provider) {
   const select = document.getElementById("modelSelect");
   const config = PROVIDER_CONFIGS[provider];
+  const activeProviderBefore =
+    typeof getActiveProvider === "function" ? getActiveProvider() : provider;
+  const canPreservePrevious = activeProviderBefore === provider;
+  const previousModel =
+    canPreservePrevious && typeof getSelectedModel === "function"
+      ? getSelectedModel()
+      : "";
   let models = config.models;
 
   if (provider === "openrouter") {
@@ -206,21 +213,72 @@ function buildModelDropdown(provider) {
     models = OPENROUTER_MODEL_GROUPS[groupKey]?.models || config.models;
   }
 
-  select.innerHTML = "";
+  const accountModels =
+    typeof getAccountCustomModelsForProvider === "function"
+      ? getAccountCustomModelsForProvider(provider)
+      : [];
+  const mergedModels = [];
+  const seen = new Set();
+  let hasCustomOption = false;
   models.forEach(function (modelInfo) {
+    const id = String(modelInfo?.id || "").trim();
+    if (!id) return;
+    if (id === "__custom__") {
+      hasCustomOption = true;
+      return;
+    }
+    if (seen.has(id)) return;
+    seen.add(id);
+    mergedModels.push(modelInfo);
+  });
+  accountModels.forEach(function (modelId) {
+    if (!modelId || seen.has(modelId)) return;
+    seen.add(modelId);
+    mergedModels.push({
+      id: modelId,
+      label: `${modelId} — đã nhập trong account`,
+    });
+  });
+  if (hasCustomOption || mergedModels.length === 0) {
+    mergedModels.push({ id: "__custom__", label: "✏️ Nhập model ID..." });
+  }
+
+  select.innerHTML = "";
+  mergedModels.forEach(function (modelInfo) {
     const option = document.createElement("option");
     option.value = modelInfo.id;
     option.textContent = modelInfo.label;
     select.appendChild(option);
   });
+  const optionValues = Array.from(select.options).map(function (opt) {
+    return opt.value;
+  });
+  const hasPreviousModel =
+    previousModel &&
+    previousModel !== "__custom__" &&
+    optionValues.includes(previousModel);
+  const shouldUseCustomPrevious =
+    previousModel && previousModel !== "__custom__" && !hasPreviousModel;
+
   if (provider === "openrouter") {
     const groupSelect = document.getElementById("openrouterModelGroup");
     const groupKey = groupSelect?.value || "mistral_translation";
     const defaultGroupModel =
       OPENROUTER_MODEL_GROUPS[groupKey]?.defaultModel || config.defaultModel;
-    select.value = defaultGroupModel;
+    select.value = optionValues.includes(defaultGroupModel)
+      ? defaultGroupModel
+      : "__custom__";
   } else {
-    select.value = config.defaultModel;
+    select.value = optionValues.includes(config.defaultModel)
+      ? config.defaultModel
+      : "__custom__";
+  }
+
+  if (hasPreviousModel) {
+    select.value = previousModel;
+  } else if (shouldUseCustomPrevious && optionValues.includes("__custom__")) {
+    select.value = "__custom__";
+    document.getElementById("modelName").value = previousModel;
   }
   onModelSelectChange(select.value);
 }
@@ -339,4 +397,3 @@ function switchProvider(provider) {
     updateWritingCostEstimation();
   }
 }
-

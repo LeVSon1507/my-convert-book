@@ -123,6 +123,9 @@
       if (!modelName) return showError('Vui lòng chọn hoặc nhập tên model.');
       if (!baseUrl) return showError('Vui lòng nhập Base URL.');
       if (!fileContent) return showError('Vui lòng tải file truyện lên trước.');
+      if (typeof rememberCustomModelForAccount === 'function') {
+        rememberCustomModelForAccount(provider, modelName);
+      }
 
       hideError();
       isWritingStopped = false;

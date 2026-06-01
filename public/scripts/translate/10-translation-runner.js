@@ -133,6 +133,9 @@ async function startTranslation() {
   if (!modelName) return showError("Vui lòng chọn hoặc nhập tên model.");
   if (!baseUrl) return showError("Vui lòng nhập Base URL.");
   if (!fileContent) return showError("Vui lòng chọn file cần dịch.");
+  if (typeof rememberCustomModelForAccount === "function") {
+    rememberCustomModelForAccount(provider, modelName);
+  }
 
   hideError();
   isStopped = false;
@@ -311,4 +314,3 @@ async function startTranslation() {
     runTranslation();
   }
 }
-

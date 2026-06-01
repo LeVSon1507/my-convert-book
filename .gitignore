@@ -19,3 +19,5 @@ dist/
 
 # Local runtime config (contains private API keys)
 config/config.local.js
+
+.codex

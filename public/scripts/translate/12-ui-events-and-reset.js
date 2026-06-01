@@ -100,6 +100,28 @@ document.getElementById("modelName").addEventListener("input", function () {
     updateWritingCostEstimation();
   }
 });
+let customModelSaveTimer = null;
+function scheduleSaveCustomModelToAccount() {
+  if (customModelSaveTimer) {
+    clearTimeout(customModelSaveTimer);
+  }
+  customModelSaveTimer = setTimeout(function () {
+    customModelSaveTimer = null;
+    const modelSelect = document.getElementById("modelSelect");
+    const modelNameInput = document.getElementById("modelName");
+    if (!modelSelect || modelSelect.value !== "__custom__" || !modelNameInput)
+      return;
+    const modelId = modelNameInput.value.trim();
+    if (!modelId || typeof rememberCustomModelForAccount !== "function") return;
+    rememberCustomModelForAccount(getActiveProvider(), modelId);
+  }, 500);
+}
+document
+  .getElementById("modelName")
+  .addEventListener("blur", scheduleSaveCustomModelToAccount);
+document
+  .getElementById("modelName")
+  .addEventListener("change", scheduleSaveCustomModelToAccount);
 document
   .getElementById("translationScope")
   .addEventListener("change", function () {
