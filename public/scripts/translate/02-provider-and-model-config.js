@@ -54,7 +54,7 @@ const OPENROUTER_MODEL_GROUPS = {
     ],
   },
   other: {
-    defaultModel: "thedrummer/cydonia-24b-v4.1",
+    defaultModel: "deepseek/deepseek-v4-flash",
     models: [
       {
         id: "thedrummer/cydonia-24b-v4.1",
@@ -63,6 +63,14 @@ const OPENROUTER_MODEL_GROUPS = {
       {
         id: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
         label: "Dolphin Mistral 24B Venice (free)",
+      },
+      {
+        id: "deepseek/deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+      },
+      {
+        id: "qwen/qwen3.6-flash",
+        label: "Qwen 3.6 Flash",
       },
       { id: "__custom__", label: "✏️ Nhập model ID..." },
     ],
@@ -115,7 +123,7 @@ const PROVIDER_CONFIGS = {
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "mistralai/mistral-small-3.2-24b-instruct",
+    defaultModel: "deepseek/deepseek-v4-flash",
     hint: "API key tại openrouter.ai/keys — dùng nhóm model Mistral/Grok rẻ",
     models: [
       {
@@ -216,6 +224,8 @@ const MODEL_CONTEXT_LIMITS = {
   "mistralai/mistral-small-creative": 128000,
   "thedrummer/cydonia-24b-v4.1": 128000,
   "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": 128000,
+  "deepseek/deepseek-v4-flash": 128000,
+  "qwen/qwen3.6-flash": 128000,
   "x-ai/grok-build-0.1": 256000,
   "x-ai/grok-4.3": 1000000,
   "x-ai/grok-4.20": 2000000,
@@ -262,6 +272,8 @@ const MODEL_PRICING = {
     input: 0,
     output: 0,
   },
+  "deepseek/deepseek-v4-flash": { input: 0.25, output: 0.7 },
+  "qwen/qwen3.6-flash": { input: 0.2, output: 0.6 },
   "x-ai/grok-build-0.1": { input: 1.0, output: 2.0 },
   "x-ai/grok-4.3": { input: 1.25, output: 2.5 },
   "x-ai/grok-4.20": { input: 1.25, output: 2.5 },
