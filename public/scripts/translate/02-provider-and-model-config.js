@@ -53,6 +53,20 @@ const OPENROUTER_MODEL_GROUPS = {
       { id: "__custom__", label: "✏️ Nhập model ID..." },
     ],
   },
+  other: {
+    defaultModel: "thedrummer/cydonia-24b-v4.1",
+    models: [
+      {
+        id: "thedrummer/cydonia-24b-v4.1",
+        label: "Cydonia 24B v4.1 — hội thoại sáng tạo",
+      },
+      {
+        id: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        label: "Dolphin Mistral 24B Venice (free)",
+      },
+      { id: "__custom__", label: "✏️ Nhập model ID..." },
+    ],
+  },
 };
 
 const PROVIDER_CONFIGS = {
