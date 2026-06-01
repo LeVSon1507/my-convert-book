@@ -320,6 +320,25 @@ Bạn là dịch giả văn học.
 - Không thêm giải thích/bình luận.
 - Chỉ trả về văn bản đã dịch.</textarea
             >
+            <div style="display: flex; gap: 8px; margin-top: 6px">
+              <button
+                class="btn btn-secondary"
+                id="savePromptsToAccountBtn"
+                onclick="savePromptsToAccount()"
+                style="display: none; flex: 1; padding: 6px 12px; font-size: 12px"
+              >
+                ☁️ Lưu prompt vào account
+              </button>
+            </div>
+            <div
+              id="promptSavedHint"
+              style="
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-top: 4px;
+                display: none;
+              "
+            ></div>
           </div>
 
           <div class="input-row">

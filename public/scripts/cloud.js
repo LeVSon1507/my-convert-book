@@ -3,6 +3,7 @@
     const FIRESTORE_CHUNK_SIZE = 600000;
     const CLOUD_PROGRESS_PREFIX = 'progress_';
     const CUSTOM_MODELS_DOC = 'custom_models';
+    const PROMPTS_DOC = 'prompts';
     const MAX_CUSTOM_MODELS_PER_PROVIDER = 30;
 
     let _fbAuth = null;
@@ -202,6 +203,7 @@
       const loggedInRow = document.getElementById('authLoggedIn');
       const headerBtn = document.getElementById('headerAuthBtn');
       const saveKeyToAccountBtn = document.getElementById('saveKeyToAccountBtn');
+      const savePromptsToAccountBtn = document.getElementById('savePromptsToAccountBtn');
       if (!loginForm) return;
       if (currentFirebaseUser) {
         loginForm.style.display = 'none';
@@ -213,14 +215,19 @@
           headerBtn.textContent = accountName || 'Tài khoản';
         }
         if (saveKeyToAccountBtn) saveKeyToAccountBtn.style.display = 'inline-flex';
+        if (savePromptsToAccountBtn) savePromptsToAccountBtn.style.display = 'inline-flex';
       } else {
         loginForm.style.display = 'block';
         loggedInRow.style.display = 'none';
         if (headerBtn) headerBtn.textContent = 'Đăng nhập';
         if (saveKeyToAccountBtn) saveKeyToAccountBtn.style.display = 'none';
+        if (savePromptsToAccountBtn) savePromptsToAccountBtn.style.display = 'none';
       }
       if (typeof loadSavedApiKey === 'function') {
         loadSavedApiKey(getActiveProvider());
+      }
+      if (typeof loadSavedPrompts === 'function') {
+        loadSavedPrompts(getActiveProvider());
       }
     }
 
@@ -274,6 +281,60 @@
       } catch (e) {
         console.error('Cloud load api key error:', e);
         return '';
+      }
+    }
+
+    async function cloudSavePrompts(provider, prompts) {
+      if (!currentFirebaseUser || !_fbDb || !provider || !prompts) return false;
+      try {
+        const uid = currentFirebaseUser.uid;
+        const payload = {
+          systemPrompt: String(prompts.systemPrompt || '').trim(),
+          glossaryInput: String(prompts.glossaryInput || '').trim(),
+          plotDirection: String(prompts.plotDirection || '').trim(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc(PROMPTS_DOC)
+          .set(
+            {
+              [provider]: payload,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+          );
+        return true;
+      } catch (e) {
+        console.error('Cloud save prompts error:', e);
+        return false;
+      }
+    }
+
+    async function cloudLoadPrompts(provider) {
+      if (!currentFirebaseUser || !_fbDb || !provider) return null;
+      try {
+        const uid = currentFirebaseUser.uid;
+        const snap = await _fbDb
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc(PROMPTS_DOC)
+          .get();
+        if (!snap.exists) return null;
+        const data = snap.data() || {};
+        const providerPrompts = data[provider];
+        if (!providerPrompts || typeof providerPrompts !== 'object') return null;
+        return {
+          systemPrompt: String(providerPrompts.systemPrompt || ''),
+          glossaryInput: String(providerPrompts.glossaryInput || ''),
+          plotDirection: String(providerPrompts.plotDirection || '')
+        };
+      } catch (e) {
+        console.error('Cloud load prompts error:', e);
+        return null;
       }
     }
 

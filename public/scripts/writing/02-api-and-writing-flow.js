@@ -126,6 +126,9 @@
       if (typeof rememberCustomModelForAccount === 'function') {
         rememberCustomModelForAccount(provider, modelName);
       }
+      if (typeof savePromptsToAccount === 'function' && currentFirebaseUser) {
+        savePromptsToAccount();
+      }
 
       hideError();
       isWritingStopped = false;

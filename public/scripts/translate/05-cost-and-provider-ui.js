@@ -357,6 +357,9 @@ function switchProvider(provider) {
     provider === "openrouter" ? "block" : "none";
   buildModelDropdown(provider);
   loadSavedApiKey(provider);
+  if (typeof loadSavedPrompts === "function") {
+    loadSavedPrompts(provider);
+  }
   updateApiKeyUiForProvider(provider);
   syncConcurrentInputLimitForProvider(provider);
 

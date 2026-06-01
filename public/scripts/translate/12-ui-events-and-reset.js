@@ -101,6 +101,7 @@ document.getElementById("modelName").addEventListener("input", function () {
   }
 });
 let customModelSaveTimer = null;
+let promptSaveTimer = null;
 function scheduleSaveCustomModelToAccount() {
   if (customModelSaveTimer) {
     clearTimeout(customModelSaveTimer);
@@ -122,6 +123,27 @@ document
 document
   .getElementById("modelName")
   .addEventListener("change", scheduleSaveCustomModelToAccount);
+function scheduleSavePromptsToAccount() {
+  if (promptSaveTimer) {
+    clearTimeout(promptSaveTimer);
+  }
+  promptSaveTimer = setTimeout(function () {
+    promptSaveTimer = null;
+    if (typeof savePromptsToAccount !== "function" || !currentFirebaseUser)
+      return;
+    savePromptsToAccount();
+  }, 900);
+}
+document
+  .getElementById("systemPrompt")
+  .addEventListener("blur", scheduleSavePromptsToAccount);
+document
+  .getElementById("glossaryInput")
+  .addEventListener("blur", scheduleSavePromptsToAccount);
+const plotDirectionInputEl = document.getElementById("plotDirection");
+if (plotDirectionInputEl) {
+  plotDirectionInputEl.addEventListener("blur", scheduleSavePromptsToAccount);
+}
 document
   .getElementById("translationScope")
   .addEventListener("change", function () {

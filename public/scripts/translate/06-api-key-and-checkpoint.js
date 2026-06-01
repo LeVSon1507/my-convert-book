@@ -40,6 +40,75 @@ async function saveApiKeyToAccount() {
   hint.style.display = "block";
 }
 
+async function savePromptsToAccount() {
+  const provider = getActiveProvider();
+  const promptSavedHint = document.getElementById("promptSavedHint");
+  const payload = {
+    systemPrompt: document.getElementById("systemPrompt")?.value || "",
+    glossaryInput: document.getElementById("glossaryInput")?.value || "",
+    plotDirection: document.getElementById("plotDirection")?.value || "",
+  };
+  if (
+    !payload.systemPrompt.trim() &&
+    !payload.glossaryInput.trim() &&
+    !payload.plotDirection.trim()
+  ) {
+    if (promptSavedHint) {
+      promptSavedHint.textContent = "⚠️ Prompt đang trống, không có gì để lưu.";
+      promptSavedHint.style.display = "block";
+    }
+    return;
+  }
+  if (!currentFirebaseUser || typeof cloudSavePrompts !== "function") {
+    if (promptSavedHint) {
+      promptSavedHint.textContent = "⚠️ Cần đăng nhập account để lưu prompt.";
+      promptSavedHint.style.display = "block";
+    }
+    return;
+  }
+  const ok = await cloudSavePrompts(provider, payload);
+  if (promptSavedHint) {
+    promptSavedHint.textContent = ok
+      ? "☁️ Đã lưu prompt vào account."
+      : "❌ Không lưu được prompt lên account.";
+    promptSavedHint.style.display = "block";
+  }
+}
+
+function loadSavedPrompts(provider) {
+  const promptSavedHint = document.getElementById("promptSavedHint");
+  if (
+    !currentFirebaseUser ||
+    typeof cloudLoadPrompts !== "function" ||
+    !provider
+  ) {
+    if (promptSavedHint) promptSavedHint.style.display = "none";
+    return;
+  }
+  cloudLoadPrompts(provider).then(function (prompts) {
+    if (!prompts) return;
+    if (provider !== getActiveProvider()) return;
+    if (typeof prompts.systemPrompt === "string" && prompts.systemPrompt.trim()) {
+      document.getElementById("systemPrompt").value = prompts.systemPrompt;
+    }
+    if (typeof prompts.glossaryInput === "string") {
+      document.getElementById("glossaryInput").value = prompts.glossaryInput;
+    }
+    if (typeof prompts.plotDirection === "string") {
+      const plotDirectionEl = document.getElementById("plotDirection");
+      if (plotDirectionEl) plotDirectionEl.value = prompts.plotDirection;
+    }
+    if (fileContent) {
+      updateCostEstimation();
+      updateWritingCostEstimation();
+    }
+    if (promptSavedHint) {
+      promptSavedHint.textContent = "☁️ Đã load prompt cloud cho " + provider + ".";
+      promptSavedHint.style.display = "block";
+    }
+  });
+}
+
 function clearApiKey() {
   const provider = getActiveProvider();
   if (provider === "ollama") return;
@@ -289,4 +358,3 @@ function updateLocalProgressHistoryEntry(status) {
     updatedAt: Date.now(),
   });
 }
-
