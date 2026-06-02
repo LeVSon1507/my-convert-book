@@ -6,7 +6,7 @@ async function retryFailedChunks(maxRetryRounds) {
 
     const failedIndices = [];
     translatedChunks.forEach(function findFailed(chunkText, chunkIndex) {
-      if (chunkText && chunkText.startsWith(FAILED_MARKER)) {
+      if (chunkText?.startsWith(FAILED_MARKER)) {
         failedIndices.push(chunkIndex);
       }
     });
