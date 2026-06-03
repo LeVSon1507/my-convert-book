@@ -2,13 +2,13 @@ export async function resolveFirebaseConfig() {
   const local =
     globalThis.TRANSLATOR_LOCAL_CONFIG &&
     globalThis.TRANSLATOR_LOCAL_CONFIG.firebase;
-  if (local && local.apiKey) {
+  if (local?.apiKey) {
     globalThis.FIREBASE_CONFIG = local;
     return;
   }
 
   const protocol =
-    globalThis.location && globalThis.location.protocol
+    globalThis.location?.protocol
       ? globalThis.location.protocol
       : '';
   const isHttp = protocol === 'http:' || protocol === 'https:';
@@ -55,7 +55,7 @@ export function applyLocalRuntimeConfig() {
 
 export async function resolveServerRuntimeConfig() {
   const protocol =
-    globalThis.location && globalThis.location.protocol
+    globalThis.location?.protocol
       ? globalThis.location.protocol
       : '';
   const isHttp = protocol === 'http:' || protocol === 'https:';
@@ -81,6 +81,16 @@ export async function loadOptionalLocalConfig() {
     document.head.appendChild(script);
   });
 }
+function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = false;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.body.appendChild(script);
+    });
+  }
 
 export async function loadLegacyScripts() {
   const scripts = [
@@ -92,8 +102,10 @@ export async function loadLegacyScripts() {
     '/scripts/translate/06-api-key-and-checkpoint.js',
     '/scripts/translate/07-history-and-file-loading.js',
     '/scripts/translate/08-chunking-and-runtime-controls.js',
+    '/scripts/translate/08b-chapter-detection.js',
     '/scripts/translate/09a-translate-chunk.js',
     '/scripts/translate/09b-process-chunks.js',
+    '/scripts/translate/09c-glossary-extraction.js',
     '/scripts/translate/10-translation-runner.js',
     '/scripts/translate/11-export-and-result.js',
     '/scripts/translate/12-ui-events-and-reset.js',
@@ -103,17 +115,7 @@ export async function loadLegacyScripts() {
     '/scripts/cloud.js'
   ];
 
-  function loadScript(src) {
-    return new Promise(function (resolve, reject) {
-      const script = document.createElement('script');
-      script.src = src;
-      script.async = false;
-      script.onload = resolve;
-      script.onerror = reject;
-      document.body.appendChild(script);
-    });
-  }
-
+  
   for (const src of scripts) {
     await loadScript(src);
   }

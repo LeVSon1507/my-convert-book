@@ -46,6 +46,18 @@ function updateCostEstimation() {
   const outputCost = estimateCost(estimatedOutputChars, model, false);
   const totalCost = inputCost + outputCost;
 
+  // Auto-glossary pre-pass cost estimate (3 sample API calls)
+  const useAutoGlossary = document.getElementById("enableAutoGlossary")?.checked;
+  // ~350 chars system prompt + 3000 chars sample text per request, 3 requests, max 600 output tokens each
+  const GLOSSARY_SAMPLE_INPUT_CHARS = (350 + 3000) * 3;
+  const GLOSSARY_SAMPLE_OUTPUT_CHARS = 600 * 3 * 3; // 600 tokens × 3 chars/token × 3 requests
+  const glossaryPrePassCost = useAutoGlossary
+    ? estimateCost(GLOSSARY_SAMPLE_INPUT_CHARS, model, true) +
+      estimateCost(GLOSSARY_SAMPLE_OUTPUT_CHARS, model, false)
+    : 0;
+  const glossaryPrePassTokensIn = useAutoGlossary ? estimateTokenCount(GLOSSARY_SAMPLE_INPUT_CHARS) : 0;
+  const glossaryPrePassTokensOut = useAutoGlossary ? estimateTokenCount(GLOSSARY_SAMPLE_OUTPUT_CHARS) : 0;
+
   const pricing = getModelPricing(model);
   const hasLowPricing = pricing.input < 0.5 && pricing.output < 1.0;
   const hasActualUsage =
@@ -80,9 +92,19 @@ function updateCostEstimation() {
           <span class="cost-value">${totalOutputTokens.toLocaleString("vi-VN")}</span>
         </div>
         <div class="cost-item">
-          <span class="cost-label">💰 Chi phí ước tính</span>
+          <span class="cost-label">💰 Chi phí dịch (ước)</span>
           <span class="cost-value highlight">$${totalCost.toFixed(4)} USD</span>
         </div>
+        ${useAutoGlossary ? `
+        <div class="cost-item">
+          <span class="cost-label">🔍 Pre-pass glossary (~3 requests)</span>
+          <span class="cost-value">${glossaryPrePassTokensIn.toLocaleString("vi-VN")} in · ${glossaryPrePassTokensOut.toLocaleString("vi-VN")} out · <b>$${glossaryPrePassCost.toFixed(4)}</b></span>
+        </div>
+        <div class="cost-item">
+          <span class="cost-label">💰 Tổng chi phí (ước, có glossary)</span>
+          <span class="cost-value highlight">$${(totalCost + glossaryPrePassCost).toFixed(4)} USD</span>
+        </div>
+        ` : ""}
         ${
           hasActualUsage
             ? `

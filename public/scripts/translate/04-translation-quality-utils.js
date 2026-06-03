@@ -5,6 +5,13 @@ function normalizeTranslatedText(text) {
   output = output
     .replace(/^```(?:text|markdown)?\s*/i, "")
     .replace(/\s*```$/, "");
+  // Strip markdown bold markers (not used in Vietnamese prose)
+  output = output.replace(/\*\*/g, "");
+  // Collapse sequences of 2+ em dashes into one
+  output = output.replace(/—{2,}/g, "—");
+  // Normalize em dashes used as dialogue markers: ensure no leading space before —
+  // but preserve em dashes used mid-sentence (which should have spaces around them)
+  output = output.replace(/^[ \t]+—/gm, "—");
   return output.trim();
 }
 
@@ -23,27 +30,25 @@ function isSpeedOptimizedMode() {
   return true;
 }
 
-function buildTranslationUserPrompt(chunkText, strictMode) {
+function buildTranslationUserPrompt(chunkText, strictMode, contextInfo) {
+  var ctx = contextInfo || {};
+  var glossary = ctx.glossaryInstruction || "";
+  var prevTail = ctx.prevTranslatedTail || "";
+  var summary = ctx.summaryBefore || "";
   if (!strictMode && isSpeedOptimizedMode()) {
-    return `Dịch sang tiếng Việt tự nhiên, giữ ý và xuống dòng, chỉ trả về bản dịch:\n\n${chunkText}`;
+    var speedPrompt = "D\u1ECBch ti\u1EBFng Vi\u1EC7t t\u1EF1 nhi\u00EAn, gi\u1EEF \u00FD v\u00E0 xu\u1ED1ng d\u00F2ng";
+    if (glossary) speedPrompt += ". T\u1EEB v\u1EF1ng:\n" + glossary;
+    return speedPrompt + ":\n\n" + chunkText;
   }
-
-  return `Dịch chính xác đoạn sau sang tiếng Việt tự nhiên.
-
-Yêu cầu bắt buộc:
-- Không được bỏ sót ý.
-- Không được lặp câu/lặp đoạn.
-- Không chép lại văn bản gốc tiếng Anh/Trung (chỉ trả về tiếng Việt).
-- Giữ cấu trúc xuống dòng gần bản gốc.
-- Chỉnh dấu câu cho tự nhiên tiếng Việt.
-- Không thêm giải thích.
-${strictMode ? "- Nếu còn nghi ngờ, ưu tiên dịch ngắn gọn đúng nghĩa thay vì lặp lại.\n" : ""}Trả về đúng định dạng:
-<vi_translation>
-[bản dịch]
-</vi_translation>
-
-Đoạn cần dịch:
-${chunkText}`;
+  // Standard mode: system prompt handles requirements.
+  // User prompt is context-only + chunk. Keeps tokens low, quality high.
+  var parts = [];
+  if (summary) parts.push("T\u00F3m t\u1EAFt: " + summary.slice(0, 600));
+  if (glossary) parts.push("T\u1EEB v\u1EF1ng:\n" + glossary);
+  if (prevTail) parts.push("Tr\u01B0\u1EDBc: " + prevTail);
+  if (strictMode) parts.push("(d\u1ECBch nghi\u00EAm ng\u1EB7t, \u01B0u ti\u00EAn ch\u00EDnh x\u00E1c ng\u1EAFn g\u1ECDn)");
+  var prefix = parts.length ? parts.join("\n") + "\n\n" : "";
+  return prefix + chunkText;
 }
 
 function extractTaggedTranslation(text) {
@@ -237,6 +242,33 @@ function hasSevereRepetition(translatedText) {
     countMap.set(paragraph, (countMap.get(paragraph) || 0) + 1);
   });
 
+function hasTruncatedOutput(translatedText) {
+  var text = (translatedText || "").trim();
+  if (!text) return false;
+  var lastChar = text.charAt(text.length - 1);
+  // Valid sentence-ending characters
+  var validEndings = ".\u3002!?\uFF01\uFF1F\u2026\u300B\u201D\u2019\"";
+  if (validEndings.indexOf(lastChar) >= 0) return false;
+  // Check if last "word" is cut short — Chinese char mid-sequence or Vietnamese word fragment
+  var lastSegment = text.slice(-80);
+  // If the text ends with a partial tag or marker, it's truncated
+  if (/<[^>]*$/.test(text)) return true;
+  // If last line ends mid-word (no space, no punct, and preceded by normal text)
+  // Common truncation pattern: text ends with a non-terminal character in the middle of content
+  var lines = text.split("\n");
+  var lastLine = lines[lines.length - 1].trim();
+  if (!lastLine) return false;
+  // If lastLine is very short (< 15 chars) and lacks ending punctuation, likely truncated
+  if (lastLine.length < 15 && !/[.\u3002!?\uFF01\uFF1F\u2026]\s*$/.test(lastLine)) {
+    // But don't flag if it's clearly a standalone short line (e.g. chapter title, dialogue line)
+    if (!/^(?:\u201C|\u2018|\u300C|\u300E|[A-Z\u00C0-\u1EF9])/.test(lastLine)) {
+      return true;
+    }
+  }
+  // Heuristic: translated content should NOT end with a comma or conjunction-like word
+  if (/[,;\uFF0C\u3001]\s*$/.test(lastLine)) return true;
+  return false;
+}
   const duplicateCount = Array.from(countMap.values()).filter(function (count) {
     return count > 1;
   }).length;

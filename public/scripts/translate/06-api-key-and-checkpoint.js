@@ -88,7 +88,10 @@ function loadSavedPrompts(provider) {
   cloudLoadPrompts(provider).then(function (prompts) {
     if (!prompts) return;
     if (provider !== getActiveProvider()) return;
-    if (typeof prompts.systemPrompt === "string" && prompts.systemPrompt.trim()) {
+    if (
+      typeof prompts.systemPrompt === "string" &&
+      prompts.systemPrompt.trim()
+    ) {
       document.getElementById("systemPrompt").value = prompts.systemPrompt;
     }
     if (typeof prompts.glossaryInput === "string") {
@@ -103,7 +106,8 @@ function loadSavedPrompts(provider) {
       updateWritingCostEstimation();
     }
     if (promptSavedHint) {
-      promptSavedHint.textContent = "☁️ Đã load prompt cloud cho " + provider + ".";
+      promptSavedHint.textContent =
+        "☁️ Đã load prompt cloud cho " + provider + ".";
       promptSavedHint.style.display = "block";
     }
   });
@@ -208,7 +212,41 @@ function getTranslationCheckpoint(
     if (!key) return null;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+
+    // Already v2 — return as-is
+    if (parsed && parsed.__v === 2) return parsed;
+
+    // v1 migration: convert string[] translatedChunks → ChunkState[], overwrite in-place
+    const v1Chunks = Array.isArray(parsed && parsed.translatedChunks)
+      ? parsed.translatedChunks
+      : [];
+    const migratedStates = v1Chunks.map(function (text) {
+      return {
+        originalText: null,
+        translatedText: text || null,
+        chapterIndex: 0,
+        chapterTitle: "",
+        summaryBefore: "",
+        glossaryUsed: "",
+        status: text ? "done" : "pending",
+        failReason: null,
+        translatedAt: null,
+      };
+    });
+    const v2 = Object.assign({}, parsed, {
+      __v: 2,
+      chunkStates: migratedStates,
+      chapterMap: [],
+      currentSummary: "",
+    });
+    // Overwrite v1 with v2 in localStorage
+    try {
+      localStorage.setItem(key, JSON.stringify(v2));
+    } catch {
+      /* ignore quota */
+    }
+    return v2;
   } catch {
     return null;
   }
@@ -231,7 +269,11 @@ function setTranslationCheckpoint(
       scopePercent,
     );
     if (!key) return;
-    localStorage.setItem(key, JSON.stringify(payload));
+    // Always write v2
+    localStorage.setItem(
+      key,
+      JSON.stringify(Object.assign({ __v: 2 }, payload)),
+    );
   } catch {
     // ignore quota
   }

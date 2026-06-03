@@ -14,8 +14,10 @@
     '/scripts/translate/06-api-key-and-checkpoint.js',
     '/scripts/translate/07-history-and-file-loading.js',
     '/scripts/translate/08-chunking-and-runtime-controls.js',
+    '/scripts/translate/08b-chapter-detection.js',
     '/scripts/translate/09a-translate-chunk.js',
     '/scripts/translate/09b-process-chunks.js',
+    '/scripts/translate/09c-glossary-extraction.js',
     '/scripts/translate/10-translation-runner.js',
     '/scripts/translate/11-export-and-result.js',
     '/scripts/translate/12-ui-events-and-reset.js'

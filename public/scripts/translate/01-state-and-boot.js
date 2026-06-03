@@ -36,6 +36,17 @@ const TRANSLATION_CHECKPOINT_PREFIX = "translation_checkpoint_v1:";
 const TRANSLATION_HISTORY_KEY = "translation_history_v1";
 let currentFirebaseUser = null;
 let cloudHistory = [];
+let chunkStates = []; // ChunkState[] metadata parallel to translatedChunks
+let currentSummary = ""; // rolling story summary injected into translation context
+let chapterMap = []; // { chunkIndex, chapterIndex, chapterTitle }[]
+let isSummaryUpdating = false; // guard: only one rolling summary update at a time
+
+function resetTranslationPipelineState() {
+  chunkStates = [];
+  currentSummary = "";
+  chapterMap = [];
+  isSummaryUpdating = false;
+}
 
 function hasActiveLongTask() {
   return isTranslationRunning || isAnalysisRunning || isWritingRunning;
@@ -99,12 +110,12 @@ function parseGlossaryInput(rawGlossaryText) {
 
 function buildGlossaryInstruction(glossaryPairs) {
   if (!glossaryPairs || glossaryPairs.length === 0) return "";
-  const rows = glossaryPairs
+  var rows = glossaryPairs
     .map(function (pair) {
-      return `- ${pair.source} => ${pair.target}`;
+      return "- " + pair.source + " => " + pair.target;
     })
     .join("\n");
-  return `\n\nBắt buộc dùng glossary sau khi dịch tên riêng/địa danh/thuật ngữ:\n${rows}\n- Ưu tiên tuyệt đối các mapping trên.\n- Giữ nhất quán giữa mọi đoạn.`;
+  return "\n\nGLOSSARY B\u1eaeT BU\u1ed8C \u2014 d\u00f9ng \u0111\u00fang mapping sau, kh\u00f4ng \u0111\u01b0\u1ee3c t\u1ef1 \u00fd \u0111\u1ed5i t\u00ean ri\u00eang:\n" + rows + "\n- TUY\u1ec6T \u0110\u1ed0I d\u00f9ng \u0111\u00fang t\u00ean \u1edf tr\u00ean, gi\u1eef nguy\u00ean m\u1ecdi \u0111o\u1ea1n.";
 }
 
 function resetUsageStats() {

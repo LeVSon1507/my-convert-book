@@ -101,6 +101,22 @@
         </div>
       </div>
       <div data-mode-section="translate">
+        <!-- Onboarding Steps -->
+        <div class="card onboarding-card" id="onboardingSteps">
+          <div class="onboarding-title">👋 Bắt đầu trong 5 bước</div>
+          <div class="onboarding-steps-row">
+            <div class="onboarding-step">1️⃣<br>Chọn file .txt</div>
+            <div class="onboarding-arrow">→</div>
+            <div class="onboarding-step">2️⃣<br>AI trích xuất glossary</div>
+            <div class="onboarding-arrow">→</div>
+            <div class="onboarding-step">3️⃣<br>Chọn model &amp; API key</div>
+            <div class="onboarding-arrow">→</div>
+            <div class="onboarding-step">4️⃣<br>Bắt đầu dịch</div>
+            <div class="onboarding-arrow">→</div>
+            <div class="onboarding-step">5️⃣<br>Export .txt/.epub/.docx</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:10px;font-size:11px" onclick="dismissOnboarding()">Đã hiểu, ẩn đi ✕</button>
+        </div>
         <!-- Step 1: API Config -->
         <div class="card" id="apiCard">
           <div class="card-title api-config-header">
@@ -279,6 +295,11 @@
           </div>
 
           <div class="file-info" id="fileInfo"></div>
+          <div style="margin-top:8px;text-align:center">
+            <button class="btn btn-secondary btn-sm" style="font-size:12px" onclick="loadSampleStory()">
+              📖 Dùng thử với truyện mẫu (50KB)
+            </button>
+          </div>
         </div>
 
         <!-- Cost Estimation (after file upload) -->
@@ -309,16 +330,11 @@
           <div class="form-group">
             <label for="systemPrompt">System Prompt (chỉ thị dịch)</label>
             <textarea id="systemPrompt">
-Bạn là dịch giả văn học.
-- Dịch tự nhiên sang tiếng Việt thuần, mạch lạc.
-- Dịch đủ ý, không bỏ sót câu/đoạn.
-- Không lặp câu, không lặp đoạn.
-- Không chèn lại bản gốc chưa dịch.
-- Giữ nguyên tên riêng nếu chưa có bản dịch phổ biến.
-- Giữ giọng văn và cấu trúc xuống dòng bản gốc.
-- Dấu câu theo văn phong tiếng Việt tự nhiên, dễ đọc.
-- Không thêm giải thích/bình luận.
-- Chỉ trả về văn bản đã dịch.</textarea
+Dịch giả văn học. Dịch tiếng Việt thuần, tự nhiên.
+- Dịch đủ ý, không bỏ sót, không lặp, không chèn bản gốc.
+- TÊN RIÊNG PHẢI GIỮ NGUYÊN 100% giữa các đoạn. Dùng glossary nếu có; nếu không: phiên âm Hán-Việt chuẩn, không đổi.
+- Giữ xuống dòng gần bản gốc, dấu câu tự nhiên.
+- Chỉ trả bản dịch, không giải thích.</textarea
             >
             <div style="display: flex; gap: 8px; margin-top: 6px">
               <button
@@ -378,6 +394,17 @@ Bạn là dịch giả văn học.
           </div>
 
           <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text-primary)">
+              <input type="checkbox" id="enableChapterSplit" checked />
+              <span>📖 Chia theo chương tự động</span>
+            </label>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;margin-left:26px">
+              Tự nhận diện 第X章 / Chapter N / Part N và tách đúng ranh giới chương. Nếu không tìm thấy chương sẽ tự động fallback về chia theo ký tự.
+              <span id="chapterDetectionHint" style="color:var(--success);display:none"></span>
+            </div>
+          </div>
+
+          <div class="form-group">
             <label for="glossaryInput"
               >Glossary tên riêng/địa danh
               <span
@@ -397,7 +424,21 @@ Bạn là dịch giả văn học.
           </div>
 
           <div class="form-group">
-            <label>Temperature: <span id="tempDisplay">0.3</span></label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text-primary)">
+              <input type="checkbox" id="enableAutoGlossary" />
+              <span>🔍 Trích xuất tên riêng/địa danh tự động trước khi dịch</span>
+            </label>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;margin-left:26px">
+              AI đọc 3 đoạn mẫu, liệt kê tên nhân vật/địa danh/môn phái và gợi ý dịch. Bạn có thể review và sửa trước khi dịch. Tốn thêm ~3 API calls.
+            </div>
+            <div id="glossaryLoading" style="display:none;margin-top:8px;margin-left:26px;font-size:13px;color:var(--accent,#7c3aed);align-items:center;gap:6px;padding:6px 0">
+              <span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid var(--border-color,#444);border-top-color:var(--accent,#7c3aed);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle"></span>
+              <span id="glossaryLoadingText">Đang trích xuất...</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Temperature: <span id="tempDisplay">0.3</span> <span class="info-icon" title="Thấp (0.1–0.3): ổn định, ít sáng tạo, tốt cho dịch thuật chính xác. Cao (0.7–1.0): sáng tạo hơn nhưng dễ lệch mạch truyện.">ⓘ</span></label>
             <div class="slider-row">
               <input
                 type="range"
@@ -599,7 +640,7 @@ Bạn là dịch giả văn học.
             </div>
             <div class="form-group">
               <label
-                >Temperature: <span id="writingTempDisplay">0.7</span></label
+                >Temperature: <span id="writingTempDisplay">0.7</span> <span class="info-icon" title="Thấp (0.3–0.5): văn phong ổn định, bám sát mẫu. Cao (0.7–1.0): sáng tạo hơn, phong phú hơn nhưng dễ lệch mạch truyện.">ⓘ</span></label
               >
               <div class="slider-row">
                 <input
@@ -663,6 +704,18 @@ Bạn là dịch giả văn học.
             ⏳ Tải file để xem ước tính token viết tiếp.
           </div>
 
+
+          <div class="form-group" style="margin-top:12px">
+            <label style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;display:block">🎭 Hướng viết tiếp</label>
+            <div style="display:flex;flex-wrap:wrap;gap:6px" id="writingStyleGrid">
+              <button class="btn btn-secondary writing-style-btn active" data-style="neutral"  style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('neutral')">⚖️ Giữ nguyên</button>
+              <button class="btn btn-secondary writing-style-btn"        data-style="intense"  style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('intense')">🔥 Căng thẳng hơn</button>
+              <button class="btn btn-secondary writing-style-btn"        data-style="dark"     style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('dark')">🌑 Tối hơn</button>
+              <button class="btn btn-secondary writing-style-btn"        data-style="light"    style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('light')">☀️ Nhẹ nhàng hơn</button>
+              <button class="btn btn-secondary writing-style-btn"        data-style="romantic" style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('romantic')">💕 Romance hơn</button>
+              <button class="btn btn-secondary writing-style-btn"        data-style="funny"    style="padding:6px 10px;font-size:12px" onclick="setSelectedWritingStyle('funny')">😄 Hài hơn</button>
+            </div>
+          </div>
           <div class="button-row" style="margin-top: 12px">
             <button
               class="btn btn-writing btn-lg"
@@ -998,3 +1051,32 @@ Bạn là dịch giả văn học.
     </div>
 
     <div id="cloudToast" class="cloud-toast"></div>
+
+    <!-- Glossary Review Modal -->
+    <div id="glossaryModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:16px">
+      <div style="background:var(--card-bg,#1e1e2e);border:1px solid var(--border-color,#333);border-radius:12px;padding:24px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+        <div style="font-size:15px;font-weight:600;color:var(--text-primary)">🔍 Glossary đề xuất từ AI</div>
+        <p style="font-size:13px;color:var(--text-secondary);margin:0">AI đề xuất <strong id="glossaryModalCount">0</strong> từ vựng. Bạn có thể chỉnh sửa trước khi dịch:</p>
+        <textarea id="glossaryModalTextarea" rows="14" style="width:100%;font-size:12px;font-family:monospace;resize:vertical;background:var(--input-bg,#2a2a3e);border:1px solid var(--border-color,#444);border-radius:6px;padding:8px;color:var(--text-primary);box-sizing:border-box"></textarea>
+        <p style="font-size:11px;color:var(--text-muted);margin:0">Mỗi dòng: <code>tên gốc =&gt; gợi ý dịch</code>. Xóa dòng không cần, thêm dòng mới thoải mái.</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="glossaryModalSkipBtn" class="btn btn-secondary" style="padding:8px 16px;font-size:13px">⏭ Bỏ qua</button>
+          <button id="glossaryModalApplyBtn" class="btn btn-primary" style="padding:8px 16px;font-size:13px">✅ Dùng glossary này</button>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      /* Onboarding */
+      .onboarding-card { background: linear-gradient(135deg, var(--card-bg, #1e1e2e), rgba(99,102,241,0.08)); border: 1px solid rgba(99,102,241,0.25); }
+      .onboarding-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px; }
+      .onboarding-steps-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+      .onboarding-step { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 6px 10px; background: rgba(99,102,241,0.1); border-radius: 8px; min-width: 80px; line-height: 1.4; }
+      .onboarding-arrow { font-size: 14px; color: var(--text-muted); }
+      /* Writing style active state */
+      .writing-style-btn.active { background: var(--primary, #6366f1); color: #fff; border-color: var(--primary, #6366f1); }
+      /* Temperature info icon */
+      .info-icon { cursor: help; font-size: 12px; color: var(--text-muted); vertical-align: middle; margin-left: 2px; }
+      /* Chunk action buttons */
+      .chunk-actions button { padding: 3px 8px; font-size: 11px; margin: 0; }
+    </style>

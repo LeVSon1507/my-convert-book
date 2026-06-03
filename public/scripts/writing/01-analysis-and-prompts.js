@@ -1,74 +1,91 @@
-    /* ===== Continue Writing Feature ===== */
+/* ===== Continue Writing Feature ===== */
 
-    let isWritingStopped = false;
-    let continuedChunks = [];
-    let cachedStoryAnalysis = null;
+let isWritingStopped = false;
+let continuedChunks = [];
+let cachedStoryAnalysis = null;
+let selectedWritingStyle = "neutral"; // 'neutral'|'intense'|'dark'|'light'|'romantic'|'funny'
 
-    function getWritingContextBudgets(modelName) {
-      const contextLimit = MODEL_CONTEXT_LIMITS[modelName] || 32000;
+function getWritingContextBudgets(modelName) {
+  const contextLimit = MODEL_CONTEXT_LIMITS[modelName] || 32000;
 
-      if (contextLimit <= 32768) {
-        return { sampleSize: 1200, lastChapterLength: 4500, previousTailLength: 1200 };
+  if (contextLimit <= 32768) {
+    return {
+      sampleSize: 1200,
+      lastChapterLength: 4500,
+      previousTailLength: 1200,
+    };
+  }
+  if (contextLimit <= 64000) {
+    return {
+      sampleSize: 1800,
+      lastChapterLength: 7000,
+      previousTailLength: 2000,
+    };
+  }
+  return {
+    sampleSize: 2500,
+    lastChapterLength: 10000,
+    previousTailLength: 3500,
+  };
+}
+
+function extractWritingContext(text, budgets) {
+  const SAMPLE_SIZE = budgets?.sampleSize || 2500;
+  const LAST_CHAPTER_LENGTH = budgets?.lastChapterLength || 10000;
+
+  // Lấy 3 mẫu văn phong: đầu, giữa, cuối
+  const beginSample = text.slice(0, Math.min(SAMPLE_SIZE, text.length));
+
+  let styleSample = `[ĐẦU TRUYỆN]\n${beginSample}`;
+
+  if (text.length > SAMPLE_SIZE * 3) {
+    const middleStart =
+      Math.floor(text.length / 2) - Math.floor(SAMPLE_SIZE / 2);
+    const middleSample = text.slice(middleStart, middleStart + SAMPLE_SIZE);
+    styleSample += `\n\n[GIỮA TRUYỆN]\n${middleSample}`;
+
+    const nearEndStart = Math.floor(text.length * 0.8);
+    const nearEndSample = text.slice(nearEndStart, nearEndStart + SAMPLE_SIZE);
+    styleSample += `\n\n[GẦN CUỐI TRUYỆN]\n${nearEndSample}`;
+  }
+
+  // Chỉ giữ cửa sổ ngữ cảnh gần cuối để giảm token lặp.
+  const lastChapter =
+    text.length > LAST_CHAPTER_LENGTH ? text.slice(-LAST_CHAPTER_LENGTH) : text;
+
+  return { styleSample, lastChapter };
+}
+
+/* --- Story Pre-Analysis --- */
+
+function splitStoryForAnalysis(text) {
+  const ANALYSIS_CHUNK_SIZE = 6000;
+  const analysisChunks = [];
+  let currentPosition = 0;
+
+  while (currentPosition < text.length) {
+    let endPosition = currentPosition + ANALYSIS_CHUNK_SIZE;
+
+    if (endPosition < text.length) {
+      const paragraphBreak = text.lastIndexOf("\n\n", endPosition);
+      if (paragraphBreak > currentPosition + ANALYSIS_CHUNK_SIZE * 0.5) {
+        endPosition = paragraphBreak + 2;
       }
-      if (contextLimit <= 64000) {
-        return { sampleSize: 1800, lastChapterLength: 7000, previousTailLength: 2000 };
-      }
-      return { sampleSize: 2500, lastChapterLength: 10000, previousTailLength: 3500 };
     }
 
-    function extractWritingContext(text, budgets) {
-      const SAMPLE_SIZE = budgets?.sampleSize || 2500;
-      const LAST_CHAPTER_LENGTH = budgets?.lastChapterLength || 10000;
+    analysisChunks.push(text.slice(currentPosition, endPosition));
+    currentPosition = endPosition;
+  }
 
-      // Lấy 3 mẫu văn phong: đầu, giữa, cuối
-      const beginSample = text.slice(0, Math.min(SAMPLE_SIZE, text.length));
+  return analysisChunks;
+}
 
-      let styleSample = `[ĐẦU TRUYỆN]\n${beginSample}`;
-
-      if (text.length > SAMPLE_SIZE * 3) {
-        const middleStart = Math.floor(text.length / 2) - Math.floor(SAMPLE_SIZE / 2);
-        const middleSample = text.slice(middleStart, middleStart + SAMPLE_SIZE);
-        styleSample += `\n\n[GIỮA TRUYỆN]\n${middleSample}`;
-
-        const nearEndStart = Math.floor(text.length * 0.8);
-        const nearEndSample = text.slice(nearEndStart, nearEndStart + SAMPLE_SIZE);
-        styleSample += `\n\n[GẦN CUỐI TRUYỆN]\n${nearEndSample}`;
-      }
-
-      // Chỉ giữ cửa sổ ngữ cảnh gần cuối để giảm token lặp.
-      const lastChapter = text.length > LAST_CHAPTER_LENGTH
-        ? text.slice(-LAST_CHAPTER_LENGTH)
-        : text;
-
-      return { styleSample, lastChapter };
-    }
-
-    /* --- Story Pre-Analysis --- */
-
-    function splitStoryForAnalysis(text) {
-      const ANALYSIS_CHUNK_SIZE = 6000;
-      const analysisChunks = [];
-      let currentPosition = 0;
-
-      while (currentPosition < text.length) {
-        let endPosition = currentPosition + ANALYSIS_CHUNK_SIZE;
-
-        if (endPosition < text.length) {
-          const paragraphBreak = text.lastIndexOf('\n\n', endPosition);
-          if (paragraphBreak > currentPosition + ANALYSIS_CHUNK_SIZE * 0.5) {
-            endPosition = paragraphBreak + 2;
-          }
-        }
-
-        analysisChunks.push(text.slice(currentPosition, endPosition));
-        currentPosition = endPosition;
-      }
-
-      return analysisChunks;
-    }
-
-    async function analyzeChunkContent(chunkText, chunkNumber, totalAnalysisChunks) {
-      const systemPrompt = `Bạn là nhà phê bình văn học chuyên nghiệp. Nhiệm vụ: đọc đoạn truyện và trích xuất thông tin cấu trúc.
+async function analyzeChunkContent(
+  chunkText,
+  chunkNumber,
+  totalAnalysisChunks,
+) {
+  const systemPrompt = `Bạn là nhà phê bình văn học chuyên nghiệp. Nhiệm vụ: đọc đoạn truyện và trích xuất thông tin cấu trúc.
 
 Trả về CHÍNH XÁC theo format sau (không thêm gì khác):
 
@@ -82,17 +99,17 @@ Trả về CHÍNH XÁC theo format sau (không thêm gì khác):
 
 **TUYẾN TRUYỆN:** [Các tuyến truyện đang mở hoặc phát triển trong đoạn này]`;
 
-      const userPrompt = `Đây là đoạn ${chunkNumber}/${totalAnalysisChunks} của truyện. Phân tích đoạn sau:\n\n${chunkText}`;
+  const userPrompt = `Đây là đoạn ${chunkNumber}/${totalAnalysisChunks} của truyện. Phân tích đoạn sau:\n\n${chunkText}`;
 
-      return await callWritingApi(systemPrompt, userPrompt);
-    }
+  return await callWritingApi(systemPrompt, userPrompt);
+}
 
-    async function consolidateAnalysis(chunkSummaries) {
-      const allSummaries = chunkSummaries.join('\n\n---\n\n');
+async function consolidateAnalysis(chunkSummaries) {
+  const allSummaries = chunkSummaries.join("\n\n---\n\n");
 
-      const systemPrompt = `Bạn là nhà phê bình văn học. Nhiệm vụ: tổng hợp các bản phân tích từng đoạn thành MỘT bản phân tích tổng thể.`;
+  const systemPrompt = `Bạn là nhà phê bình văn học. Nhiệm vụ: tổng hợp các bản phân tích từng đoạn thành MỘT bản phân tích tổng thể.`;
 
-       const userPrompt = `Dưới đây là phân tích các đoạn gần cuối của một truyện dài. Hãy tổng hợp thành BẢN PHÂN TÍCH HOÀN CHỈNH theo format:
+  const userPrompt = `Dưới đây là phân tích các đoạn gần cuối của một truyện dài. Hãy tổng hợp thành BẢN PHÂN TÍCH HOÀN CHỈNH theo format:
 
 **NGÔI KỂ & GIỌNG VĂN:**
 - Ngôi kể: [ngôi thứ mấy? Gần gũi hay xa cách?]
@@ -118,108 +135,142 @@ Trả về CHÍNH XÁC theo format sau (không thêm gì khác):
 ${allSummaries}
 === HẾT ===`;
 
-      return await callWritingApi(systemPrompt, userPrompt);
-    }
+  return await callWritingApi(systemPrompt, userPrompt);
+}
 
-    async function analyzeFullStory(text, updateStatusCallback) {
-      // Chỉ phân tích 60K ký tự cuối thay vì toàn bộ — tiết kiệm API và hiệu quả hơn
-      const ANALYSIS_WINDOW = 60000;
-      const textToAnalyze = text.length > ANALYSIS_WINDOW
-        ? text.slice(-ANALYSIS_WINDOW)
-        : text;
+async function analyzeFullStory(text, updateStatusCallback) {
+  // Chỉ phân tích 60K ký tự cuối thay vì toàn bộ — tiết kiệm API và hiệu quả hơn
+  const ANALYSIS_WINDOW = 60000;
+  const textToAnalyze =
+    text.length > ANALYSIS_WINDOW ? text.slice(-ANALYSIS_WINDOW) : text;
 
-      const analysisChunks = splitStoryForAnalysis(textToAnalyze);
-      const totalAnalysisChunks = analysisChunks.length;
+  const analysisChunks = splitStoryForAnalysis(textToAnalyze);
+  const totalAnalysisChunks = analysisChunks.length;
 
-      if (textToAnalyze.length < 20000) {
-        updateStatusCallback('Phân tích trực tiếp...');
-        const directAnalysis = await analyzeChunkContent(textToAnalyze, 1, 1);
-        return directAnalysis;
+  if (textToAnalyze.length < 20000) {
+    updateStatusCallback("Phân tích trực tiếp...");
+    const directAnalysis = await analyzeChunkContent(textToAnalyze, 1, 1);
+    return directAnalysis;
+  }
+
+  const chunkResults = new Array(totalAnalysisChunks).fill(null);
+  let nextAnalysisIndex = 0;
+  let completedAnalysisCount = 0;
+  let activeAnalysisRequests = 0;
+  let analysisScheduleTimer = null;
+  isAnalysisRunning = true;
+
+  updateStatusCallback(
+    `Đang đọc ${totalAnalysisChunks} đoạn (song song động, có thể đổi khi đang chạy)...`,
+  );
+
+  try {
+    await new Promise(function (resolve) {
+      function queueSchedule(delayMs) {
+        if (analysisScheduleTimer !== null) return;
+        analysisScheduleTimer = setTimeout(function () {
+          analysisScheduleTimer = null;
+          scheduleAnalysis();
+        }, delayMs);
       }
 
-      const chunkResults = new Array(totalAnalysisChunks).fill(null);
-      let nextAnalysisIndex = 0;
-      let completedAnalysisCount = 0;
-      let activeAnalysisRequests = 0;
-      let analysisScheduleTimer = null;
-      isAnalysisRunning = true;
+      function maybeResolve() {
+        if (
+          (isWritingStopped || nextAnalysisIndex >= totalAnalysisChunks) &&
+          activeAnalysisRequests === 0
+        ) {
+          resolve();
+          return true;
+        }
+        return false;
+      }
 
-      updateStatusCallback(`Đang đọc ${totalAnalysisChunks} đoạn (song song động, có thể đổi khi đang chạy)...`);
+      function launchAnalysis(indexToAnalyze) {
+        activeAnalysisRequests++;
 
-      try {
-        await new Promise(function(resolve) {
-          function queueSchedule(delayMs) {
-            if (analysisScheduleTimer !== null) return;
-            analysisScheduleTimer = setTimeout(function() {
-              analysisScheduleTimer = null;
-              scheduleAnalysis();
-            }, delayMs);
+        (async function () {
+          try {
+            const summary = await analyzeChunkContent(
+              analysisChunks[indexToAnalyze],
+              indexToAnalyze + 1,
+              totalAnalysisChunks,
+            );
+            chunkResults[indexToAnalyze] =
+              `[Đoạn ${indexToAnalyze + 1}]\n${summary}`;
+          } catch (analysisError) {
+            chunkResults[indexToAnalyze] =
+              `[Đoạn ${indexToAnalyze + 1}] — Lỗi: ${analysisError.message}`;
           }
 
-          function maybeResolve() {
-            if ((isWritingStopped || nextAnalysisIndex >= totalAnalysisChunks) && activeAnalysisRequests === 0) {
-              resolve();
-              return true;
-            }
-            return false;
-          }
-
-          function launchAnalysis(indexToAnalyze) {
-            activeAnalysisRequests++;
-
-            (async function() {
-              try {
-                const summary = await analyzeChunkContent(
-                  analysisChunks[indexToAnalyze],
-                  indexToAnalyze + 1,
-                  totalAnalysisChunks
-                );
-                chunkResults[indexToAnalyze] = `[Đoạn ${indexToAnalyze + 1}]\n${summary}`;
-              } catch (analysisError) {
-                chunkResults[indexToAnalyze] = `[Đoạn ${indexToAnalyze + 1}] — Lỗi: ${analysisError.message}`;
-              }
-
-              completedAnalysisCount++;
-              updateStatusCallback(`Đã đọc ${completedAnalysisCount}/${totalAnalysisChunks} đoạn...`);
-            })().finally(function() {
-              activeAnalysisRequests--;
-              scheduleAnalysis();
-            });
-          }
-
-          function scheduleAnalysis() {
-            if (maybeResolve()) return;
-
-            const desiredConcurrency = getRuntimeConcurrentRequests();
-            while (!isWritingStopped && activeAnalysisRequests < desiredConcurrency && nextAnalysisIndex < totalAnalysisChunks) {
-              launchAnalysis(nextAnalysisIndex);
-              nextAnalysisIndex++;
-            }
-
-            if (maybeResolve()) return;
-
-            if (!isWritingStopped && nextAnalysisIndex < totalAnalysisChunks && activeAnalysisRequests < getRuntimeConcurrentRequests()) {
-              queueSchedule(120);
-            }
-          }
-
+          completedAnalysisCount++;
+          updateStatusCallback(
+            `Đã đọc ${completedAnalysisCount}/${totalAnalysisChunks} đoạn...`,
+          );
+        })().finally(function () {
+          activeAnalysisRequests--;
           scheduleAnalysis();
         });
-
-        if (isWritingStopped) return null;
-
-        const chunkSummaries = chunkResults.filter(Boolean);
-        updateStatusCallback('Đang tổng hợp phân tích...');
-        return await consolidateAnalysis(chunkSummaries);
-      } finally {
-        isAnalysisRunning = false;
       }
-    }
 
-    /* --- Prompt Builders --- */
+      function scheduleAnalysis() {
+        if (maybeResolve()) return;
 
-    function buildContinueWritingSystemPrompt(styleSample, storyAnalysis) {
-      let prompt = `Bạn là một nhà văn chuyên SAO CHÉP phong cách. Bạn KHÔNG sáng tạo giọng văn mới — bạn NHÁI CHÍNH XÁC giọng văn đã cho.
+        const desiredConcurrency = getRuntimeConcurrentRequests();
+        while (
+          !isWritingStopped &&
+          activeAnalysisRequests < desiredConcurrency &&
+          nextAnalysisIndex < totalAnalysisChunks
+        ) {
+          launchAnalysis(nextAnalysisIndex);
+          nextAnalysisIndex++;
+        }
+
+        if (maybeResolve()) return;
+
+        if (
+          !isWritingStopped &&
+          nextAnalysisIndex < totalAnalysisChunks &&
+          activeAnalysisRequests < getRuntimeConcurrentRequests()
+        ) {
+          queueSchedule(120);
+        }
+      }
+
+      scheduleAnalysis();
+    });
+
+    if (isWritingStopped) return null;
+
+    const chunkSummaries = chunkResults.filter(Boolean);
+    updateStatusCallback("Đang tổng hợp phân tích...");
+    return await consolidateAnalysis(chunkSummaries);
+  } finally {
+    isAnalysisRunning = false;
+  }
+}
+
+/* --- Prompt Builders --- */
+
+function buildContinueWritingSystemPrompt(
+  styleSample,
+  storyAnalysis,
+  writingStyle,
+) {
+  const styleInstructions = {
+    neutral: "",
+    intense:
+      "\n\nHƯỚNG VIẾT: Tăng sức căng thẳng, mâu thuẫn, và nhịp truyện. Mỗi câu phải đẩy tình huống đến giới hạn hơn. Cảm xúc nhân vật cần rõ ràng và sắc nét hơn.",
+    dark: "\n\nHƯỚNG VIẾT: Tông tối hơn — áp bức, cô đơn, hoặc hiểm nguy nặng nề hơn. Vẫn phải hợp lý với tính cách nhân vật.",
+    light:
+      "\n\nHƯỚNG VIẾT: Nhẹ nhàng, ấm áp hơn. Giảm xung đột, tăng những khoảnh khắc bình yên, thú vị hoặc hài hòa giữa nhân vật.",
+    romantic:
+      "\n\nHƯỚNG VIẾT: Tăng phần romance — khoảng cách gần hơn giữa nhân vật, ánh mắt, cảm xúc ngầm, khoảnh khắc riêng tư. Không gượng ép.",
+    funny:
+      "\n\nHƯỚNG VIẾT: Hài hước hơn, dí dỏm hơn. Tình huống trớ trêu, câu nói bất ngờ. Vẫn phải phù hợp nhân vật và không phá vỡ mạch chính.",
+  };
+  const styleAddOn = styleInstructions[writingStyle] || "";
+
+  let prompt = `Bạn là một nhà văn chuyên SAO CHÉP phong cách. Bạn KHÔNG sáng tạo giọng văn mới — bạn NHÁI CHÍNH XÁC giọng văn đã cho.
 
 ĐIỀU QUAN TRỌNG NHẤT — NGÔI KỂ VÀ GIỌNG KỂ:
 - XÁC ĐỊNH ngôi kể trong mẫu: ngôi thứ nhất ("tôi"), ngôi thứ ba gần ("anh"), hay ngôi thứ ba xa ("hắn")?
@@ -250,14 +301,14 @@ QUY TẮC KHÁC:
 - Viết tiếp ĐÚNG nhịp truyện — KHÔNG tăng tốc, KHÔNG dồn nén
 - KHÔNG tóm tắt, KHÔNG nhảy cóc thời gian
 - CHỈ trả về nội dung truyện, KHÔNG giải thích, ghi chú
-- KHÔNG bắt đầu bằng "Dưới đây là...", "Tiếp theo..."
+- KHÔNG bắt đầu bằng "Dưới đây là...", "Tiếp theo..."${styleAddOn}
 
 === MẪU VĂN PHONG (HÃY NHÁI CHÍNH XÁC NGÔI KỂ, GIỌNG KỂ, ĐẠI TỪ) ===
 ${styleSample}
 === HẾT MẪU ===`;
 
-      if (storyAnalysis) {
-        prompt += `
+  if (storyAnalysis) {
+    prompt += `
 
 === PHÂN TÍCH TÁC PHẨM ===
 ${storyAnalysis}
@@ -267,31 +318,35 @@ Hãy sử dụng bản phân tích trên để:
 - Dùng ĐÚNG đại từ/cách xưng hô của từng nhân vật như ghi trong phân tích
 - Tiếp tục các tuyến truyện đang mở
 - Giữ nhất quán với cốt truyện`;
-      }
+  }
 
-      return prompt;
-    }
+  return prompt;
+}
 
-    function buildContinueWritingUserPrompt(lastChapter, plotDirection, previousTail, writtenChunkCount) {
-      let prompt = `Đây là đoạn cuối cùng của truyện:\n\n=== ĐOẠN CUỐI ===\n${lastChapter}\n=== HẾT ===\n\n`;
+function buildContinueWritingUserPrompt(
+  lastChapter,
+  plotDirection,
+  previousTail,
+  writtenChunkCount,
+) {
+  let prompt = `Đây là đoạn cuối cùng của truyện:\n\n=== ĐOẠN CUỐI ===\n${lastChapter}\n=== HẾT ===\n\n`;
 
-      if (previousTail) {
-        prompt += `Đây là phần đuôi bạn đã viết tiếp trước đó (${writtenChunkCount} đoạn trước, chỉ đưa phần gần nhất để tránh lặp):\n\n=== ĐUÔI PHẦN ĐÃ VIẾT ===\n${previousTail}\n=== HẾT ĐUÔI ===\n\n`;
-      }
+  if (previousTail) {
+    prompt += `Đây là phần đuôi bạn đã viết tiếp trước đó (${writtenChunkCount} đoạn trước, chỉ đưa phần gần nhất để tránh lặp):\n\n=== ĐUÔI PHẦN ĐÃ VIẾT ===\n${previousTail}\n=== HẾT ĐUÔI ===\n\n`;
+  }
 
-      prompt += `Hãy viết tiếp khoảng 1500 từ, giữ ĐÚNG giọng văn và nhịp truyện của tác giả.`;
+  prompt += `Hãy viết tiếp khoảng 1500 từ, giữ ĐÚNG giọng văn và nhịp truyện của tác giả.`;
 
-      if (plotDirection) {
-        prompt += `\n\nGợi ý hướng phát triển cốt truyện (chỉ là gợi ý, hãy triển khai tự nhiên theo nhịp truyện):\n${plotDirection}`;
-      }
+  if (plotDirection) {
+    prompt += `\n\nGợi ý hướng phát triển cốt truyện (chỉ là gợi ý, hãy triển khai tự nhiên theo nhịp truyện):\n${plotDirection}`;
+  }
 
-      prompt += `\n\nLưu ý QUAN TRỌNG — đọc kỹ:
+  prompt += `\n\nLưu ý QUAN TRỌNG — đọc kỹ:
 - Viết tiếp TỰ NHIÊN ngay từ câu tiếp theo, không lặp lại nội dung đã có
 - KHÔNG thêm cảm xúc, tính từ, miêu tả nội tâm NHIỀU HƠN tác giả gốc
 - Nếu tác giả gốc viết "Cô ấy đi ra ngoài" — KHÔNG viết "Cô ấy đi ra ngoài, lòng nặng trĩu nỗi buồn"
 - Giữ TỈ LỆ đối thoại vs miêu tả ĐÚNG như truyện gốc
 - CHỈ trả về nội dung truyện, không ghi chú, không bình luận`;
 
-      return prompt;
-    }
-
+  return prompt;
+}

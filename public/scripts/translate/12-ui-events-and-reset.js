@@ -159,3 +159,57 @@ document.getElementById("baseUrl").addEventListener("change", function () {
     });
   }
 });
+
+function dismissOnboarding() {
+  const el = document.getElementById("onboardingSteps");
+  if (el) el.style.display = "none";
+  try {
+    localStorage.setItem("onboarding_dismissed", "1");
+  } catch {
+    /* noop */
+  }
+}
+globalThis.dismissOnboarding = dismissOnboarding;
+
+(function initOnboardingVisibility() {
+  try {
+    if (localStorage.getItem("onboarding_dismissed") === "1") {
+      const el = document.getElementById("onboardingSteps");
+      if (el) el.style.display = "none";
+    }
+  } catch {
+    /* noop */
+  }
+})();
+
+async function loadSampleStory() {
+  try {
+    const resp = await fetch("/sample/sample-story.txt");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const text = await resp.text();
+    loadFile(new File([text], "sample-story.txt", { type: "text/plain" }));
+  } catch (e) {
+    showError("Không thể tải truyện mẫu: " + e.message);
+  }
+}
+globalThis.loadSampleStory = loadSampleStory;
+
+// Show chapter detection result hint when file loads
+(function wireChapterDetectionHint() {
+  const origLoadFile = globalThis.loadFile;
+  if (typeof origLoadFile !== "function") return;
+  // Hint will be updated via the detection result in 10-translation-runner
+  // just wire the checkbox to update cost estimation
+  const chapterCb = document.getElementById("enableChapterSplit");
+  if (chapterCb) {
+    chapterCb.addEventListener("change", function () {
+      if (fileContent) updateCostEstimation();
+    });
+  }
+  const autoCb = document.getElementById("enableAutoGlossary");
+  if (autoCb) {
+    autoCb.addEventListener("change", function () {
+      if (fileContent) updateCostEstimation();
+    });
+  }
+})();

@@ -380,14 +380,15 @@ function shouldSkipTranslation(chunkText) {
   const text = (chunkText || "").trim();
   if (!text) return true;
   // Skip chunks that are mainly separators/punctuation/numbers
-  const letters = text.match(/[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/g);
+  // Match Latin (incl. Vietnamese), CJK (Chinese/Japanese), Korean, Cyrillic, Arabic, Thai, etc.
+  const letters = text.match(/[A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF\u0400-\u04FF]/g);
   return !letters || letters.length < 8;
 }
 
 function getMaxTokensForTranslation(chunkText) {
-  const estimatedInputTokens = estimateTokenCount((chunkText || "").length);
-  const softCap = Math.ceil(estimatedInputTokens * 1.35 + 120);
-  return Math.min(12000, Math.max(300, softCap));
+  var estimatedInputTokens = estimateTokenCount((chunkText || "").length);
+  var softCap = Math.ceil(estimatedInputTokens * 1.7 + 120);
+  return Math.min(16000, Math.max(300, softCap));
 }
 
 function getTailContext(text, maxChars) {

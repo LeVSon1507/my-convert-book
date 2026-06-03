@@ -62,7 +62,7 @@ async function retryFailedChunks(maxRetryRounds) {
 
   const remainingErrors = translatedChunks.filter(
     function checkStillFailed(chunkText) {
-      return chunkText && chunkText.startsWith(FAILED_MARKER);
+      return chunkText?.startsWith(FAILED_MARKER);
     },
   ).length;
 
@@ -144,6 +144,7 @@ async function startTranslation() {
   isStopped = false;
   isTranslationRunning = true;
   resetUsageStats();
+  resetTranslationPipelineState();
   requestWakeLock("start-translation");
   startTime = Date.now();
   completedChunks = 0;
@@ -157,9 +158,74 @@ async function startTranslation() {
   // Update cost estimation with current settings
   updateCostEstimation();
 
-  const fullChunks = splitIntoChunks(fileContent, chunkSize);
+  // Chapter-aware split (if enabled)
+  const useChapterSplit =
+    document.getElementById("enableChapterSplit")?.checked;
+  let fullChunks, detectedChapterMap;
+  if (useChapterSplit && typeof splitIntoChapterChunks === "function") {
+    const splitResult = splitIntoChapterChunks(fileContent, chunkSize);
+    fullChunks = splitResult.chunks;
+    detectedChapterMap = splitResult.chapterMap;
+    const chapCount =
+      detectedChapterMap.length > 0
+        ? Math.max(
+            ...detectedChapterMap.map(function (m) {
+              return m.chapterIndex;
+            }),
+          )
+        : 0;
+    if (chapCount >= 2) {
+      addLog(
+        "📖 Phát hiện " + chapCount + " chương — đang chia theo chương.",
+        "accent",
+      );
+    }
+  } else {
+    fullChunks = splitIntoChunks(fileContent, chunkSize);
+    detectedChapterMap = [];
+  }
+  chapterMap = detectedChapterMap;
+
   const chunks = applyTranslationScope(fullChunks);
   totalChunks = chunks.length;
+
+  // Auto-glossary extraction pre-pass (opt-in)
+  const useAutoGlossary =
+    document.getElementById("enableAutoGlossary")?.checked;
+  if (useAutoGlossary && typeof extractGlossaryFromSamples === "function") {
+    addLog("🔍 Trích xuất glossary tên riêng trước khi dịch...", "accent");
+    document.getElementById("startBtn").disabled = true;
+    try {
+      const extractedGlossary = await extractGlossaryFromSamples(chunks);
+      if (extractedGlossary && typeof showGlossaryReviewModal === "function") {
+        const decision = await showGlossaryReviewModal(extractedGlossary);
+        if (decision.action === "apply" && decision.text) {
+          const glossaryEl = document.getElementById("glossaryInput");
+          if (glossaryEl) {
+            const existing = glossaryEl.value.trim();
+            glossaryEl.value = existing
+              ? existing + "\n" + decision.text
+              : decision.text;
+          }
+          addLog(
+            "✅ Đã áp dụng " +
+              decision.text.split("\n").filter(function (l) {
+                return l.includes("=>");
+              }).length +
+              " từ vựng vào glossary.",
+            "success",
+          );
+        } else {
+          addLog("⏭ Bỏ qua glossary tự động.", "info");
+        }
+      }
+    } catch (glossaryError) {
+      addLog("⚠ Lỗi trích xuất glossary: " + glossaryError.message, "warning");
+    }
+    var loadEl = document.getElementById("glossaryLoading");
+    if (loadEl) loadEl.style.display = "none";
+  }
+
   const glossaryPairs = parseGlossaryInput(
     document.getElementById("glossaryInput")?.value || "",
   );
@@ -224,6 +290,9 @@ async function startTranslation() {
           scopePercent,
           {
             translatedChunks: translatedChunks,
+            chunkStates: chunkStates,
+            chapterMap: chapterMap,
+            currentSummary: currentSummary,
             updatedAt: Date.now(),
             fileName: originalFileName,
           },
@@ -242,6 +311,9 @@ async function startTranslation() {
             scopePercent: scopePercent,
             totalChunks: totalChunks,
             translatedChunks: translatedChunks,
+            chunkStates: chunkStates,
+            chapterMap: chapterMap,
+            currentSummary: currentSummary,
             status: "in_progress",
             force: true,
           });
@@ -287,11 +359,16 @@ async function startTranslation() {
             scopePercent: scopePercent,
             totalChunks: totalChunks,
             translatedChunks: translatedChunks,
+            chunkStates: chunkStates,
+            chapterMap: chapterMap,
+            currentSummary: currentSummary,
             status: "completed",
             force: true,
           });
         }
-        cloudSaveTranslation(_finalText);
+        if (typeof cloudSaveTranslation === "function") {
+          cloudSaveTranslation(_finalText);
+        }
         showResult(_finalText);
       }
     } catch (fatalError) {

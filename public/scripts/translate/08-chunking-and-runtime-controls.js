@@ -38,6 +38,9 @@ function persistCurrentTranslationCheckpoint(force) {
     scopePercent,
     {
       translatedChunks: translatedChunks,
+      chunkStates: chunkStates,
+      chapterMap: chapterMap,
+      currentSummary: currentSummary,
       updatedAt: Date.now(),
       fileName: originalFileName,
     },
@@ -56,6 +59,9 @@ function persistCurrentTranslationCheckpoint(force) {
       scopePercent: scopePercent,
       totalChunks: totalChunks,
       translatedChunks: translatedChunks,
+      chunkStates: chunkStates,
+      chapterMap: chapterMap,
+      currentSummary: currentSummary,
       status: "in_progress",
     });
   }
@@ -82,36 +88,60 @@ dropZone.addEventListener("drop", function (event) {
 });
 
 function splitIntoChunks(text, chunkSize) {
-  const chunks = [];
-  let currentPos = 0;
-
+  var chunks = [];
+  var currentPos = 0;
+  var minSplit = Math.floor(chunkSize * 0.5);
   while (currentPos < text.length) {
-    let endPos = currentPos + chunkSize;
-
-    if (endPos < text.length) {
-      // Try to break at paragraph boundary
-      const paragraphBreak = text.lastIndexOf("\n\n", endPos);
-      if (paragraphBreak > currentPos + chunkSize * 0.5) {
-        endPos = paragraphBreak + 2;
+    var endPos = currentPos + chunkSize;
+    if (endPos >= text.length) {
+      chunks.push(text.slice(currentPos));
+      break;
+    }
+    var searchWindow = text.slice(currentPos + minSplit, endPos + 1);
+    if (!searchWindow) {
+      chunks.push(text.slice(currentPos, endPos));
+      currentPos = endPos;
+      continue;
+    }
+    // Priority 1: paragraph break (\n\n)
+    var paraBreak = searchWindow.lastIndexOf("\n\n");
+    if (paraBreak >= 0) {
+      endPos = currentPos + minSplit + paraBreak + 2;
+    } else {
+      // Priority 2: Chinese/Vietnamese sentence-ending punctuation
+      var cjkBreak = -1;
+      var cjkPuncts = ["\u3002", "\uFF01", "\uFF1F", "\u2026"];
+      for (var p = 0; p < cjkPuncts.length; p++) {
+        var idx = searchWindow.lastIndexOf(cjkPuncts[p]);
+        if (idx > cjkBreak) cjkBreak = idx;
+      }
+      if (cjkBreak >= 0) {
+        endPos = currentPos + minSplit + cjkBreak + 1;
       } else {
-        // Try to break at sentence boundary
-        const sentenceBreak = text.lastIndexOf(". ", endPos);
-        if (sentenceBreak > currentPos + chunkSize * 0.5) {
-          endPos = sentenceBreak + 2;
+        // Priority 3: English sentence-ending punctuation followed by space/newline
+        var enBreak = -1;
+        var enPuncts = [". ", "! ", "? "];
+        for (var q = 0; q < enPuncts.length; q++) {
+          var idx2 = searchWindow.lastIndexOf(enPuncts[q]);
+          if (idx2 > enBreak) enBreak = idx2;
+        }
+        if (enBreak >= 0) {
+          endPos = currentPos + minSplit + enBreak + 2;
         } else {
-          // Break at newline
-          const newlineBreak = text.lastIndexOf("\n", endPos);
-          if (newlineBreak > currentPos + chunkSize * 0.5) {
-            endPos = newlineBreak + 1;
+          // Priority 4: newline
+          var nlBreak = searchWindow.lastIndexOf("\n");
+          if (nlBreak >= 0) {
+            endPos = currentPos + minSplit + nlBreak + 1;
           }
         }
       }
     }
-
+    // Guard: don't produce tiny fragments or overshoot
+    if (endPos <= currentPos + 80) endPos = currentPos + chunkSize;
+    if (endPos > text.length) endPos = text.length;
     chunks.push(text.slice(currentPos, endPos));
     currentPos = endPos;
   }
-
   return chunks;
 }
 

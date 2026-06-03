@@ -4,6 +4,7 @@ async function translateChunkWithRetry(
   maxRetries,
   chunkHash = null,
   glossaryInstruction = "",
+  context = {},
 ) {
   const apiKey = document.getElementById("apiKey").value.trim();
   let modelName = getSelectedModel();
@@ -33,6 +34,16 @@ async function translateChunkWithRetry(
       }, requestTimeoutMs);
 
       try {
+        var ctxForPrompt = {
+          prevTranslatedTail: context.prevTranslatedTail || "",
+          summaryBefore: context.summaryBefore || "",
+          glossaryInstruction: glossaryInstruction || "",
+        };
+        var userContent = buildTranslationUserPrompt(
+          currentChunk,
+          strictRetryMode,
+          ctxForPrompt,
+        );
         const payload =
           provider === "ollama"
             ? {
@@ -47,13 +58,7 @@ async function translateChunkWithRetry(
                 },
                 messages: [
                   { role: "system", content: systemPrompt },
-                  {
-                    role: "user",
-                    content: buildTranslationUserPrompt(
-                      currentChunk,
-                      strictRetryMode,
-                    ),
-                  },
+                  { role: "user", content: userContent },
                 ],
               }
             : {
@@ -64,13 +69,7 @@ async function translateChunkWithRetry(
                 max_tokens: getMaxTokensForTranslation(currentChunk),
                 messages: [
                   { role: "system", content: systemPrompt },
-                  {
-                    role: "user",
-                    content: buildTranslationUserPrompt(
-                      currentChunk,
-                      strictRetryMode,
-                    ),
-                  },
+                  { role: "user", content: userContent },
                 ],
               };
 
@@ -176,10 +175,7 @@ async function translateChunkWithRetry(
         throw new Error("Model trả về lẫn bản gốc, không thể dùng kết quả này");
       }
 
-      if (
-        shouldRunStrictQualityGate &&
-        hasSevereRepetition(translatedText)
-      ) {
+      if (shouldRunStrictQualityGate && hasSevereRepetition(translatedText)) {
         if (attempt < maxRetries) {
           strictRetryMode = true;
           addLog(
@@ -189,6 +185,22 @@ async function translateChunkWithRetry(
           await sleep(500 * attempt);
           continue;
         }
+      }
+
+      if (shouldRunStrictQualityGate && hasTruncatedOutput(translatedText)) {
+        if (attempt < maxRetries) {
+          strictRetryMode = true;
+          addLog(
+            `  ⚠ Đoạn ${chunkIndex + 1}: kết quả dịch bị cắt cụt, retry chế độ nghiêm ngặt...`,
+            "warning",
+          );
+          await sleep(500 * attempt);
+          continue;
+        }
+        addLog(
+          `  ⚠ Đoạn ${chunkIndex + 1}: kết quả dịch có thể bị cắt cụt (đã hết retry).`,
+          "warning",
+        );
       }
 
       // Cache the successful translation
