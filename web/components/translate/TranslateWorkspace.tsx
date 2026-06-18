@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { FileUpload } from "@/components/translate/FileUpload";
 import { ProviderAndModel } from "@/components/translate/ProviderAndModel";
 import { ExportFormat } from "@/lib/export";
@@ -284,7 +285,9 @@ function TranslationSettings() {
 }
 
 function CostPreview() {
-  const preview = useTranslationStore((s) => s.estimateCostPreview());
+  const preview = useTranslationStore(
+    useShallow((s) => s.estimateCostPreview()),
+  );
   const cacheHits = useTranslationStore((s) => s.cacheHits);
   const cacheMisses = useTranslationStore((s) => s.cacheMisses);
 
@@ -446,7 +449,7 @@ function TranslationProgress() {
         </div>
         <div className="progress-stat-card">
           <div className="stat-value">{formatNumber(usageStats.promptTokens)}</div>
-          <div className="stat-label">Prompt</div>
+          <div className="stat-label">Token đầu vào</div>
         </div>
         <div className="progress-stat-card">
           <div className="stat-value">{formatCurrency(usageStats.totalCost)}</div>
