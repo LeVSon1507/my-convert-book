@@ -1,8 +1,7 @@
-import '/styles/styles.css';
-import { bootstrapApp } from './bootstrap.js';
+import { bootstrapApp } from "./bootstrap.js";
 
 bootstrapApp().catch(function (error) {
-  console.error('App bootstrap failed:', error);
+  console.error("App bootstrap failed:", error);
 });
 
 if (import.meta.hot) {

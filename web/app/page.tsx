@@ -1,6 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { AuthPanel } from "@/components/auth/AuthPanel";
+import { HistoryWorkspace } from "@/components/history/HistoryWorkspace";
+import { TranslateWorkspace } from "@/components/translate/TranslateWorkspace";
+import { WritingWorkspace } from "@/components/writing/WritingWorkspace";
+import { loadRuntimeConfig } from "@/lib/runtimeConfig";
+import { useAuthStore } from "@/store/authStore";
+import { useTranslationStore } from "@/store/translationStore";
 
 type AppMode = "translate" | "writing" | "history";
 
@@ -12,21 +19,38 @@ const MODE_TABS: { mode: AppMode; label: string }[] = [
 
 export default function Home() {
   const [activeMode, setActiveMode] = useState<AppMode>("translate");
+  const [authPanelOpen, setAuthPanelOpen] = useState(false);
+  const user = useAuthStore((s) => s.user);
+  const bootstrapAuth = useAuthStore((s) => s.bootstrap);
+
+  useEffect(() => {
+    void bootstrapAuth();
+    void loadRuntimeConfig().then((config) => {
+      useTranslationStore.getState().applyRuntimeConfig(config);
+    });
+  }, [bootstrapAuth]);
+
+  const authButtonLabel = user?.email?.split("@")[0] || "Đăng nhập";
 
   return (
     <div className="app-wrapper">
       <div className="header">
         <div className="header-top-row">
           <div className="header-badge">Trình Dịch Truyện AI</div>
-          <button className="btn btn-secondary btn-sm header-auth-btn">
-            Đăng nhập
+          <button
+            className="btn btn-secondary btn-sm header-auth-btn"
+            onClick={() => setAuthPanelOpen((value) => !value)}
+            type="button"
+          >
+            {authButtonLabel}
           </button>
         </div>
         <h1>Dịch Truyện Chất Lượng Cao</h1>
         <p className="header-subtitle">
-          Hỗ trợ file .txt lớn (15–20 MB), dịch sang tiếng Việt thuần bằng
-          Grok, ChatGPT API, Gemini hoặc OpenRouter
+          Hỗ trợ file .txt lớn (15–20 MB), dịch sang tiếng Việt thuần bằng Grok,
+          ChatGPT API, Gemini hoặc OpenRouter
         </p>
+        {authPanelOpen && <AuthPanel onClose={() => setAuthPanelOpen(false)} />}
       </div>
 
       <div className="card" style={{ padding: 12 }}>
@@ -43,20 +67,10 @@ export default function Home() {
         </div>
       </div>
 
-      {activeMode === "translate" && (
-        <div className="card">
-          <p>Khu vực Dịch mới — sẽ được component hóa ở Phase 4.</p>
-        </div>
-      )}
-      {activeMode === "writing" && (
-        <div className="card">
-          <p>Khu vực Viết tiếp truyện — sẽ được component hóa ở Phase 5.</p>
-        </div>
-      )}
+      {activeMode === "translate" && <TranslateWorkspace />}
+      {activeMode === "writing" && <WritingWorkspace />}
       {activeMode === "history" && (
-        <div className="card">
-          <p>Khu vực Lịch sử — sẽ được component hóa ở Phase 6.</p>
-        </div>
+        <HistoryWorkspace onResume={() => setActiveMode("translate")} />
       )}
     </div>
   );

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export type ModelOption = { id: string; label: string };
 
 export type ProviderConfig = {
@@ -17,6 +16,42 @@ export type ProviderId =
   | "huggingface";
 
 export type ModelPricing = { input: number; output: number };
+
+type OpenRouterModelInfo = {
+  id?: unknown;
+  pricing?: {
+    prompt?: unknown;
+    completion?: unknown;
+  };
+};
+
+type OpenRouterModelsResponse = {
+  data?: unknown;
+};
+
+type ChatContentPart = {
+  text?: unknown;
+};
+
+type ChatResponseChoice = {
+  message?: {
+    content?: unknown;
+  };
+  text?: unknown;
+};
+
+type ChatResponseData = {
+  choices?: unknown;
+  output_text?: unknown;
+};
+
+function firstChoice(responseData: ChatResponseData): ChatResponseChoice | null {
+  if (!Array.isArray(responseData.choices)) return null;
+  const [choice] = responseData.choices;
+  return choice && typeof choice === "object"
+    ? (choice as ChatResponseChoice)
+    : null;
+}
 
 export const OPENROUTER_MODEL_GROUPS: Record<
   string,
@@ -305,14 +340,16 @@ export async function ensureOpenRouterPricingLoaded() {
   try {
     const response = await fetch("https://openrouter.ai/api/v1/models");
     if (!response.ok) return openRouterPricingMap;
-    const payload = await response.json();
+    const payload = (await response.json()) as OpenRouterModelsResponse;
     const data = Array.isArray(payload?.data) ? payload.data : [];
     const map: Record<string, ModelPricing> = {};
 
-    data.forEach((modelInfo: any) => {
-      const id = modelInfo?.id;
-      const promptPerToken = Number(modelInfo?.pricing?.prompt);
-      const completionPerToken = Number(modelInfo?.pricing?.completion);
+    data.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const modelInfo = item as OpenRouterModelInfo;
+      const id = typeof modelInfo.id === "string" ? modelInfo.id : "";
+      const promptPerToken = Number(modelInfo.pricing?.prompt);
+      const completionPerToken = Number(modelInfo.pricing?.completion);
       if (
         !id ||
         !Number.isFinite(promptPerToken) ||
@@ -339,7 +376,7 @@ export async function ensureOpenRouterPricingLoaded() {
 
 export function getModelPricing(model: string): ModelPricing {
   if (openRouterPricingMap) {
-    return openRouterPricingMap[model];
+    return openRouterPricingMap[model] || MODEL_PRICING[model] || { input: 0.1, output: 0.2 };
   }
   return MODEL_PRICING[model] || { input: 0.1, output: 0.2 };
 }
@@ -369,22 +406,29 @@ export function getOllamaEffectiveConcurrency(
   return desiredConcurrency;
 }
 
-export function extractAssistantText(responseData: any): string {
-  const directContent = responseData?.choices?.[0]?.message?.content;
+export function extractAssistantText(responseData: unknown): string {
+  if (!responseData || typeof responseData !== "object") return "";
+  const parsed = responseData as ChatResponseData;
+  const choice = firstChoice(parsed);
+  const directContent = choice?.message?.content;
   if (typeof directContent === "string" && directContent.trim())
     return directContent;
   if (Array.isArray(directContent)) {
     const joined = directContent
-      .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        const contentPart = part as ChatContentPart;
+        return typeof contentPart.text === "string" ? contentPart.text : "";
+      })
       .join("")
       .trim();
     if (joined) return joined;
   }
 
-  const altText = responseData?.choices?.[0]?.text;
+  const altText = choice?.text;
   if (typeof altText === "string" && altText.trim()) return altText;
 
-  const outputText = responseData?.output_text;
+  const outputText = parsed.output_text;
   if (typeof outputText === "string" && outputText.trim()) return outputText;
 
   return "";
