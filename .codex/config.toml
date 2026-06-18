@@ -1,0 +1,21 @@
+# --- ck-managed-agents-start ---
+[agents.code_reviewer]
+description = "Code review agent that checks for bugs, security issues, performance problems, and adherence to best practices. Use after writing new code or before opening a PR. Specializes in TypeScript, NestJS, React, and gRPC stacks."
+config_file = "agents/code_reviewer.toml"
+
+[agents.debugger]
+description = "Systematic debugging agent. Given an error message, unexpected behavior, or failing test, it traces the root cause through logs, stack traces, and code inspection. Use when you're stuck on a bug and need a fresh pair of eyes."
+config_file = "agents/debugger.toml"
+
+[agents.git_pr]
+description = "Git workflow agent for creating well-structured commits and PRs. Analyzes staged changes, writes conventional commit messages, and generates clear PR descriptions with context. Use when you're ready to commit or open a PR."
+config_file = "agents/git_pr.toml"
+
+[agents.research]
+description = "Deep research agent for technical topics, library docs, API specs, best practices, and architecture patterns. Use when you need to investigate a technology, find examples, or compare solutions before implementing."
+config_file = "agents/research.toml"
+
+[agents.test_writer]
+description = "Generates unit, integration, and e2e tests. Reads existing code and test patterns in the project, then writes tests that match the style and framework already in use. Covers happy paths, edge cases, and error scenarios."
+config_file = "agents/test_writer.toml"
+# --- ck-managed-agents-end ---
