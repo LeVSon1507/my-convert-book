@@ -33,15 +33,27 @@ export async function POST(request: NextRequest) {
     return jsonError("Missing apiKey", 400);
   }
 
-  const targetUrl = provider === "ollama" ? `${baseUrl}/api/chat` : `${baseUrl}/chat/completions`;
+  let targetUrl: string;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (provider !== "ollama") headers.Authorization = `Bearer ${apiKey}`;
+  let upstreamBody: unknown = payload;
+
+  if (provider === "ollama") {
+    targetUrl = `${baseUrl}/api/chat`;
+  } else if (provider === "gemini") {
+    const { model, ...rest } = payload as Record<string, unknown> & { model?: string };
+    targetUrl = `${baseUrl}/models/${encodeURIComponent(model ?? "")}:generateContent`;
+    headers["x-goog-api-key"] = apiKey;
+    upstreamBody = rest;
+  } else {
+    targetUrl = `${baseUrl}/chat/completions`;
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
 
   try {
     const upstream = await fetch(targetUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(upstreamBody),
     });
 
     const text = await upstream.text();

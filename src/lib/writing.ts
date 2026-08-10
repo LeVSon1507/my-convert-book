@@ -2,6 +2,7 @@ import { getCachedStoryAnalysis, setCachedStoryAnalysis } from "@/lib/cache";
 import { estimateTokenCount } from "@/lib/cost";
 import { requestChatCompletions } from "@/lib/chatApi";
 import {
+  GEMINI_SAFETY_SETTINGS,
   MODEL_CONTEXT_LIMITS,
   ProviderId,
   extractAssistantText,
@@ -35,6 +36,10 @@ type WritingResponseData = {
     prompt_tokens?: unknown;
     completion_tokens?: unknown;
     cost?: unknown;
+  };
+  usageMetadata?: {
+    promptTokenCount?: unknown;
+    candidatesTokenCount?: unknown;
   };
   message?: {
     content?: unknown;
@@ -70,13 +75,15 @@ function getMaxTokensForWriting(model: string, systemPrompt: string, userPrompt:
 
 function parseUsage(responseData: WritingResponseData): WritingUsage {
   const usage = responseData.usage;
-  if (!usage || typeof usage !== "object") {
+  const usageMetadata = responseData.usageMetadata;
+  if (!usage && !usageMetadata) {
     return { promptTokens: 0, completionTokens: 0, totalCost: 0 };
   }
   return {
-    promptTokens: Number(usage.prompt_tokens) || 0,
-    completionTokens: Number(usage.completion_tokens) || 0,
-    totalCost: Number(usage.cost) || 0,
+    promptTokens: Number(usage?.prompt_tokens ?? usageMetadata?.promptTokenCount) || 0,
+    completionTokens:
+      Number(usage?.completion_tokens ?? usageMetadata?.candidatesTokenCount) || 0,
+    totalCost: Number(usage?.cost) || 0,
   };
 }
 
@@ -139,6 +146,49 @@ function splitStoryForAnalysis(text: string): string[] {
   return chunks;
 }
 
+function buildWritingPayload(
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+  ctx: WritingApiContext,
+): object {
+  if (ctx.provider === "ollama") {
+    return {
+      model: ctx.model,
+      stream: false,
+      keep_alive: "30m",
+      options: {
+        temperature: ctx.temperature,
+        num_predict: maxTokens,
+      },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    };
+  }
+
+  if (ctx.provider === "gemini") {
+    return {
+      model: ctx.model,
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      safetySettings: GEMINI_SAFETY_SETTINGS,
+      generationConfig: { temperature: ctx.temperature, maxOutputTokens: maxTokens },
+    };
+  }
+
+  return {
+    model: ctx.model,
+    temperature: ctx.temperature,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  };
+}
+
 async function callWritingApi(
   systemPrompt: string,
   userPrompt: string,
@@ -147,30 +197,7 @@ async function callWritingApi(
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), 180000);
   const maxTokens = getMaxTokensForWriting(ctx.model, systemPrompt, userPrompt);
-  const payload =
-    ctx.provider === "ollama"
-      ? {
-          model: ctx.model,
-          stream: false,
-          keep_alive: "30m",
-          options: {
-            temperature: ctx.temperature,
-            num_predict: maxTokens,
-          },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }
-      : {
-          model: ctx.model,
-          temperature: ctx.temperature,
-          max_tokens: maxTokens,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        };
+  const payload = buildWritingPayload(systemPrompt, userPrompt, maxTokens, ctx);
 
   try {
     const response = await requestChatCompletions(

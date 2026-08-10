@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { requestChatCompletions } from "@/lib/chatApi";
 import { getCachedTranslation, setCacheTranslation } from "@/lib/cache";
 import { buildTranslationPrompt, type SkillId } from "@/lib/skills";
+import { buildGlossaryInstruction, parseGlossaryInput } from "@/lib/glossary";
 import {
   ChapterMapEntry,
   splitIntoChapterChunks,
@@ -13,26 +14,22 @@ import {
   estimateTokenCount,
 } from "@/lib/cost";
 import { exportAs, ExportFormat } from "@/lib/export";
-import { saveTranslation, saveTranslationProgress } from "@/lib/firebase";
+import { getCurrentIdToken, saveTranslation, saveTranslationProgress } from "@/lib/firebase";
 import {
   PROVIDER_CONFIGS,
   OPENROUTER_MODEL_GROUPS,
   ProviderId,
-  extractAssistantText,
   getOllamaEffectiveConcurrency,
-  getRequestTimeoutMs,
   hashContent,
   shouldSkipTranslation,
 } from "@/lib/providers";
+import { buildFinalTextFromChunks, buildTranslationUserPrompt } from "@/lib/quality";
 import {
-  buildFinalTextFromChunks,
-  buildTranslationUserPrompt,
-  hasSevereRepetition,
-  hasSevereSourceEcho,
-  hasTruncatedOutput,
-  postProcessTranslationOutput,
-  splitChunkForContextRetry,
-} from "@/lib/quality";
+  sleep,
+  translateChunkWithRetry,
+  type EngineParams,
+  type UsageDelta,
+} from "@/lib/translationEngine";
 import type { RuntimeConfig } from "@/lib/runtimeConfig";
 import { useAuthStore } from "@/store/authStore";
 
@@ -98,42 +95,6 @@ export type TranslationCostPreview = {
   grandTotalCost: number;
 };
 
-function parseGlossaryInput(
-  rawGlossaryText: string,
-): { source: string; target: string }[] {
-  return String(rawGlossaryText || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"))
-    .flatMap((line) => {
-      let arrow: string | null = null;
-      if (line.includes("=>")) {
-        arrow = "=>";
-      } else if (line.includes("->")) {
-        arrow = "->";
-      }
-
-      if (!arrow) return [];
-      const [source, ...rest] = line.split(arrow);
-      const target = rest.join(arrow).trim();
-      return source.trim() && target ? [{ source: source.trim(), target }] : [];
-    });
-}
-
-function buildGlossaryInstruction(
-  pairs: { source: string; target: string }[],
-): string {
-  if (!pairs.length) return "";
-  const rows = pairs
-    .map((pair) => `- ${pair.source} => ${pair.target}`)
-    .join("\n");
-  return `\n\nGLOSSARY BẮT BUỘC — dùng đúng mapping sau, không được tự ý đổi tên riêng:\n${rows}\n- TUYỆT ĐỐI dùng đúng tên ở trên, giữ nguyên mọi đoạn.`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function isTranslatedChunk(value: string | null): value is string {
   return Boolean(value);
 }
@@ -173,16 +134,6 @@ function modelPatchForProvider(
   return isKnownModel
     ? { modelSelectValue: model, customModelName: "" }
     : { modelSelectValue: "__custom__", customModelName: model };
-}
-
-function getErrorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : undefined;
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function getTranslationHistoryId(
@@ -408,6 +359,11 @@ type TranslationState = {
   resultVisible: boolean;
   progressVisible: boolean;
   pendingResumeCheckpoint: TranslationResumeCheckpoint | null;
+  /** Non-null while a backend translation job (see src/app/api/translate/jobs) is
+   *  running for a signed-in user — translation keeps going server-side even if
+   *  this tab closes. Null means the legacy fully-client-side pipeline below owns
+   *  the run instead (Ollama, or no signed-in user). */
+  activeJobId: string | null;
 
   setProvider: (provider: ProviderId) => void;
   setModelSelectValue: (value: string) => void;
@@ -424,12 +380,15 @@ type TranslationState = {
   estimateCostPreview: () => TranslationCostPreview | null;
 
   startTranslation: () => Promise<void>;
-  stopTranslation: () => void;
+  stopTranslation: () => Promise<void>;
   resumeFromCheckpoint: (checkpoint: TranslationResumeCheckpoint) => void;
   ignoreResumeCheckpoint: () => void;
   selectSkill: (skillId: SkillId | null) => void;
   downloadResult: (format: ExportFormat) => Promise<void>;
   downloadPartial: (format: ExportFormat) => Promise<void>;
+  /** Reattaches to a still-running backend job after sign-in or a page reload —
+   *  this is what makes "tắt màn hình vẫn dịch tiếp được" visible to the user. */
+  resumeActiveBackendJob: () => Promise<void>;
 };
 
 type TranslationGetter = () => TranslationState;
@@ -720,6 +679,226 @@ async function executeTranslationRun(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Backend translation jobs (src/app/api/translate/jobs/*): the browser only
+// starts a job and polls its status here — the actual chunk-by-chunk translation
+// runs server-side via src/lib/translationJobRunner.ts, so it keeps going even if
+// this tab closes or the screen locks. See resumeActiveBackendJob() above for how
+// reopening the tab reattaches to a job that's still running.
+// ---------------------------------------------------------------------------
+
+const POLL_INTERVAL_MS = 3000;
+const STALE_JOB_MS = 90_000;
+
+let backendPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopBackendJobPolling(): void {
+  if (backendPollTimer) {
+    clearInterval(backendPollTimer);
+    backendPollTimer = null;
+  }
+}
+
+type BackendJobStatusResponse = {
+  job: {
+    id: string;
+    status: "running" | "stopping" | "stopped" | "completed" | "error";
+    totalChunks: number;
+    fileName: string;
+    logs: LogEntry[];
+    error: string;
+    updatedAtMs: number;
+  };
+  progress: {
+    done: number;
+    permanentlyFailed: number;
+    promptTokens: number;
+    completionTokens: number;
+    cost: number;
+  };
+};
+
+async function fetchBackendJobText(
+  jobId: string,
+): Promise<{ text: string; chunks: string[] } | null> {
+  const idToken = await getCurrentIdToken();
+  if (!idToken) return null;
+  try {
+    const response = await fetch(`/api/translate/jobs/${jobId}/text`, {
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { text?: string; chunks?: string[] };
+    if (typeof data.text !== "string" || !Array.isArray(data.chunks)) return null;
+    return { text: data.text, chunks: data.chunks };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBackendJobChunks(jobId: string): Promise<string[] | null> {
+  const result = await fetchBackendJobText(jobId);
+  return result?.chunks ?? null;
+}
+
+async function finalizeBackendJob(
+  status: "completed" | "stopped",
+  jobId: string,
+  get: TranslationGetter,
+  set: TranslationSetter,
+): Promise<void> {
+  const result = await fetchBackendJobText(jobId);
+  set({
+    activeJobId: null,
+    isRunning: false,
+    translatedChunks: result?.chunks ?? [],
+  });
+
+  if (status === "completed" && result) {
+    set({ resultText: result.text, resultVisible: true });
+    addLogEntry(get, set, "🎉 Hoàn thành!", "success");
+  } else {
+    addLogEntry(get, set, "Đã dừng.", "warning");
+  }
+}
+
+async function pollBackendJobOnce(
+  jobId: string,
+  get: TranslationGetter,
+  set: TranslationSetter,
+): Promise<void> {
+  const idToken = await getCurrentIdToken();
+  if (!idToken) return;
+
+  let response: Response;
+  try {
+    response = await fetch(`/api/translate/jobs/${jobId}`, {
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+  } catch {
+    return; // transient network hiccup — the interval retries in 3s
+  }
+  if (!response.ok) return;
+
+  const { job, progress } = (await response.json()) as BackendJobStatusResponse;
+  set({
+    totalChunks: job.totalChunks,
+    completedChunks: progress.done + progress.permanentlyFailed,
+    usageStats: {
+      promptTokens: progress.promptTokens,
+      completionTokens: progress.completionTokens,
+      totalCost: progress.cost,
+    },
+    logs: job.logs,
+  });
+
+  if (job.status === "completed" || job.status === "stopped") {
+    stopBackendJobPolling();
+    await finalizeBackendJob(job.status, jobId, get, set);
+    return;
+  }
+
+  if (job.status === "error") {
+    stopBackendJobPolling();
+    set({ isRunning: false, activeJobId: null, error: `Lỗi dịch: ${job.error}` });
+    return;
+  }
+
+  // Still running/stopping. Nudging the tick chain from here is a much faster
+  // safety net than the once-a-day cron sweep Vercel Hobby allows (see
+  // src/app/api/cron/resume-stalled-jobs) — active exactly when it's cheap to
+  // check: whenever a tab happens to be open and polling.
+  if (Date.now() - job.updatedAtMs > STALE_JOB_MS) {
+    void fetch(`/api/translate/jobs/${jobId}/tick`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${idToken}` },
+    }).catch(() => {});
+  }
+}
+
+function startBackendJobPolling(
+  jobId: string,
+  get: TranslationGetter,
+  set: TranslationSetter,
+): void {
+  stopBackendJobPolling();
+  backendPollTimer = setInterval(() => void pollBackendJobOnce(jobId, get, set), POLL_INTERVAL_MS);
+}
+
+async function stopBackendJob(jobId: string): Promise<void> {
+  const idToken = await getCurrentIdToken();
+  if (!idToken) return;
+  await fetch(`/api/translate/jobs/${jobId}/stop`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${idToken}` },
+  }).catch(() => {});
+}
+
+async function startBackendTranslation(
+  state: TranslationState,
+  config: StartTranslationConfig,
+  get: TranslationGetter,
+  set: TranslationSetter,
+): Promise<void> {
+  set({
+    error: "",
+    isStopped: false,
+    isRunning: true,
+    usageStats: { promptTokens: 0, completionTokens: 0, totalCost: 0 },
+    startTime: Date.now(),
+    completedChunks: 0,
+    translatedChunks: [],
+    logs: [],
+    progressVisible: true,
+    resultVisible: false,
+    activeJobId: null,
+  });
+  addLogEntry(get, set, "Đang tạo job dịch nền...", "accent");
+
+  try {
+    const idToken = await getCurrentIdToken();
+    if (!idToken) throw new Error("Không lấy được phiên đăng nhập.");
+
+    const response = await fetch("/api/translate/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({
+        fileName: state.fileName,
+        fileContent: state.fileContent,
+        fileHash: state.currentFileHash,
+        provider: state.provider,
+        model: config.modelName,
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        chunkSize: state.chunkSize,
+        concurrentRequests: state.concurrentRequests,
+        temperature: state.temperature,
+        delayBetweenChunks: state.delayBetweenChunks,
+        scopePercent: state.scopePercent,
+        enableChapterSplit: state.enableChapterSplit,
+        systemPrompt: state.systemPrompt,
+        glossaryInput: state.glossaryInput,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+
+    set({ activeJobId: data.jobId });
+    addLogEntry(
+      get,
+      set,
+      "🖥️ Đang dịch nền trên server — có thể đóng trình duyệt hoặc tắt màn hình.",
+      "success",
+    );
+    startBackendJobPolling(data.jobId, get, set);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    addLogEntry(get, set, `Lỗi tạo job dịch nền: ${message}`, "error");
+    set({ error: `Lỗi dịch: ${message}`, isRunning: false });
+  }
+}
+
 export const useTranslationStore = create<TranslationState>((set, get) => ({
   provider: "openrouter",
   baseUrl: PROVIDER_CONFIGS.openrouter.baseUrl,
@@ -762,6 +941,7 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   resultVisible: false,
   progressVisible: false,
   pendingResumeCheckpoint: null,
+  activeJobId: null,
 
   setProvider(provider) {
     const config = PROVIDER_CONFIGS[provider];
@@ -930,6 +1110,14 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
     const config = getStartTranslationConfig(state);
     if ("error" in config) return set({ error: config.error });
 
+    // Signed-in users get a backend job (survives tab close / screen off);
+    // Ollama can't run there (Vercel has no network path to localhost), and
+    // anonymous users have nowhere to store a job, so both keep the legacy
+    // fully-client-side pipeline below.
+    if (useAuthStore.getState().user && state.provider !== "ollama") {
+      return startBackendTranslation(state, config, get, set);
+    }
+
     const resumeError = getResumeMismatchError(state);
     if (resumeError) return set({ error: resumeError });
 
@@ -958,7 +1146,14 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
     }
   },
 
-  stopTranslation() {
+  async stopTranslation() {
+    const activeJobId = get().activeJobId;
+    if (activeJobId) {
+      addLogEntry(get, set, "Đang dừng job dịch nền...", "warning");
+      await stopBackendJob(activeJobId);
+      return;
+    }
+
     set({ isStopped: true });
     addLogEntry(
       get,
@@ -966,6 +1161,42 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
       "Đang dừng... (hoàn thành các yêu cầu đang chạy)",
       "warning",
     );
+  },
+
+  async resumeActiveBackendJob() {
+    const user = useAuthStore.getState().user;
+    if (!user || get().activeJobId || get().isRunning) return;
+
+    const idToken = await getCurrentIdToken();
+    if (!idToken) return;
+
+    try {
+      const response = await fetch("/api/translate/jobs?status=running", {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as { jobs?: { id: string }[] };
+      const job = data.jobs?.[0];
+      if (!job) return;
+
+      set({
+        activeJobId: job.id,
+        isRunning: true,
+        isStopped: false,
+        progressVisible: true,
+        resultVisible: false,
+        error: "",
+      });
+      addLogEntry(
+        get,
+        set,
+        "🖥️ Đã kết nối lại job dịch nền đang chạy — vẫn dịch tiếp khi bạn đóng tab trước đó.",
+        "accent",
+      );
+      startBackendJobPolling(job.id, get, set);
+    } catch {
+      // Best-effort reconnect — the job keeps running server-side regardless.
+    }
   },
 
   resumeFromCheckpoint(checkpoint) {
@@ -1002,8 +1233,16 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   },
 
   async downloadResult(format) {
-    const { translatedChunks, fileName } = get();
+    const { activeJobId, fileName } = get();
     const baseName = fileName.replace(/\.[^.]+$/, "");
+    // A completed/stopped backend job already gets its text copied into local
+    // state by the poller (see finalizeBackendJob below) and clears activeJobId,
+    // so this only actually hits the network while a job is still running.
+    const translatedChunks = activeJobId
+      ? await fetchBackendJobChunks(activeJobId)
+      : get().translatedChunks;
+    if (!translatedChunks) return;
+
     const savedName = await exportAs(
       translatedChunks,
       `${baseName}_vietnamese`,
@@ -1013,10 +1252,15 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   },
 
   async downloadPartial(format) {
-    const { translatedChunks, fileName } = get();
+    const { activeJobId, fileName } = get();
+    const baseName = fileName.replace(/\.[^.]+$/, "");
+    const translatedChunks = activeJobId
+      ? await fetchBackendJobChunks(activeJobId)
+      : get().translatedChunks;
+    if (!translatedChunks) return;
+
     const doneChunks = translatedChunks.filter(isTranslatedChunk);
     if (!doneChunks.length) return;
-    const baseName = fileName.replace(/\.[^.]+$/, "");
     const savedName = await exportAs(
       doneChunks,
       `${baseName}_partial_${doneChunks.length}chunks_vietnamese`,
@@ -1037,271 +1281,35 @@ type PipelineContext = {
   set: TranslationSetter;
 };
 
-type ChatCompletionResponse = {
-  usage?: {
-    prompt_tokens?: unknown;
-    completion_tokens?: unknown;
-    cost?: unknown;
-  };
-  message?: {
-    content?: unknown;
-  };
-  choices?: unknown;
-  output_text?: unknown;
-};
-
-type AttemptErrorResolution =
-  | { action: "retry" }
-  | { action: "split"; text: string };
-
-function buildChatPayload(
-  chunk: string,
-  strictRetryMode: boolean,
-  ctx: PipelineContext,
-): object {
-  const temperature = ctx.get().temperature;
-  const messages = [
-    { role: "system", content: `${ctx.get().systemPrompt}${ctx.glossaryInstruction}` },
-    {
-      role: "user",
-      content: buildTranslationUserPrompt(chunk, strictRetryMode, true, {
-        glossaryInstruction: ctx.glossaryInstruction,
-      }),
-    },
-  ];
-
-  if (ctx.provider === "ollama") {
-    return {
-      model: ctx.model,
-      stream: false,
-      keep_alive: "30m",
-      options: {
-        temperature,
-        top_p: 0.9,
-        repeat_penalty: strictRetryMode ? 1.18 : 1.12,
-      },
-      messages,
-    };
-  }
-
+/**
+ * Builds engine params fresh from live store state on every call (rather than once
+ * per run) so a mid-run edit to temperature/system prompt — nothing in the UI
+ * disables those inputs while isRunning is true — still applies to chunks that
+ * haven't started yet, matching the pre-refactor behavior where buildChatPayload
+ * read straight from the live Zustand store.
+ */
+function buildEngineParams(ctx: PipelineContext): EngineParams {
+  const state = ctx.get();
   return {
+    provider: ctx.provider,
     model: ctx.model,
-    temperature,
-    frequency_penalty: strictRetryMode ? 0.4 : 0.2,
-    presence_penalty: 0,
-    messages,
+    apiKey: ctx.apiKey,
+    baseUrl: ctx.baseUrl,
+    glossaryInstruction: ctx.glossaryInstruction,
+    temperature: state.temperature,
+    systemPrompt: state.systemPrompt,
   };
 }
 
-async function requestChunkTranslation(
-  payload: object,
-  requestTimeoutMs: number,
-  ctx: PipelineContext,
-): Promise<Response> {
-  const controller = new AbortController();
-  let didTimeout = false;
-  const timeoutId = setTimeout(() => {
-    didTimeout = true;
-    controller.abort();
-  }, requestTimeoutMs);
-
-  try {
-    return await requestChatCompletions(
-      ctx.provider,
-      ctx.baseUrl,
-      ctx.apiKey,
-      payload,
-      controller.signal,
-    );
-  } catch (requestError) {
-    if (didTimeout) {
-      throw new Error(`Timeout sau ${(requestTimeoutMs / 1000).toFixed(0)}s`);
-    }
-    throw requestError;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function readChatCompletionResponse(
-  response: Response,
-): Promise<ChatCompletionResponse> {
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`HTTP ${response.status}: ${errorBody}`);
-  }
-
-  return (await response.json()) as ChatCompletionResponse;
-}
-
-function addUsageStatsFromResponse(
-  responseData: ChatCompletionResponse,
-  ctx: PipelineContext,
-): void {
-  const usage = responseData.usage;
-  if (!usage || typeof usage !== "object") return;
-
-  const promptTokens = Number(usage.prompt_tokens) || 0;
-  const completionTokens = Number(usage.completion_tokens) || 0;
-  const cost = Number(usage.cost) || 0;
-  if (promptTokens <= 0 && completionTokens <= 0 && cost <= 0) return;
-
+function addUsageDelta(ctx: PipelineContext, delta: UsageDelta): void {
   const prev = ctx.get().usageStats;
   ctx.set({
     usageStats: {
-      promptTokens: prev.promptTokens + Math.max(promptTokens, 0),
-      completionTokens: prev.completionTokens + Math.max(completionTokens, 0),
-      totalCost: prev.totalCost + Math.max(cost, 0),
+      promptTokens: prev.promptTokens + delta.promptTokens,
+      completionTokens: prev.completionTokens + delta.completionTokens,
+      totalCost: prev.totalCost + delta.cost,
     },
   });
-}
-
-function extractRawTranslationOutput(
-  responseData: ChatCompletionResponse,
-  provider: ProviderId,
-): string {
-  return provider === "ollama" && typeof responseData.message?.content === "string"
-    ? responseData.message.content
-    : extractAssistantText(responseData);
-}
-
-async function translateChunkOnce(
-  chunk: string,
-  strictRetryMode: boolean,
-  requestTimeoutMs: number,
-  ctx: PipelineContext,
-): Promise<string> {
-  const payload = buildChatPayload(chunk, strictRetryMode, ctx);
-  const response = await requestChunkTranslation(payload, requestTimeoutMs, ctx);
-  const responseData = await readChatCompletionResponse(response);
-
-  addUsageStatsFromResponse(responseData, ctx);
-
-  const translatedText = postProcessTranslationOutput(
-    extractRawTranslationOutput(responseData, ctx.provider),
-    chunk,
-    strictRetryMode,
-    true,
-  );
-  if (!translatedText) throw new Error("Phản hồi API không hợp lệ");
-
-  return translatedText;
-}
-
-function getQualityRetryDelayMs(
-  translatedText: string,
-  sourceChunk: string,
-  attempt: number,
-  maxRetries: number,
-): number | null {
-  if (attempt >= maxRetries) return null;
-  if (hasSevereSourceEcho(translatedText, sourceChunk)) return 600 * attempt;
-  if (hasSevereRepetition(translatedText)) return 500 * attempt;
-  if (hasTruncatedOutput(translatedText)) return 500 * attempt;
-  return null;
-}
-
-function isContextLengthError(status: number | undefined, message: string): boolean {
-  return Boolean(
-    status === 400 &&
-      (message.includes("context") ||
-        message.includes("too long") ||
-        message.includes("maximum")),
-  );
-}
-
-async function splitAndTranslateChunk(
-  chunk: string,
-  chunkIndex: number,
-  ctx: PipelineContext,
-): Promise<string | null> {
-  if (chunk.length <= 1000) return null;
-
-  const splitPair = splitChunkForContextRetry(chunk);
-  if (!splitPair) return null;
-
-  const [left, right] = await Promise.all([
-    translateChunkWithRetry(splitPair[0], chunkIndex, 2, null, ctx),
-    translateChunkWithRetry(splitPair[1], chunkIndex, 2, null, ctx),
-  ]);
-  return [left, right].filter(Boolean).join("\n");
-}
-
-async function resolveTranslationAttemptError(
-  translationError: unknown,
-  attempt: number,
-  maxRetries: number,
-  chunk: string,
-  chunkIndex: number,
-  ctx: PipelineContext,
-): Promise<AttemptErrorResolution> {
-  const status = getErrorStatus(translationError);
-  const message = getErrorMessage(translationError);
-
-  if (status === 429 && attempt < maxRetries) {
-    await sleep(Math.min(5000 * 2 ** attempt, 30000) + Math.random() * 1000);
-    return { action: "retry" };
-  }
-
-  if (isContextLengthError(status, message) && attempt < maxRetries) {
-    const splitText = await splitAndTranslateChunk(chunk, chunkIndex, ctx);
-    if (splitText) return { action: "split", text: splitText };
-  }
-
-  if (attempt === maxRetries) throw translationError;
-
-  await sleep(attempt * 2000);
-  return { action: "retry" };
-}
-
-async function translateChunkWithRetry(
-  chunk: string,
-  chunkIndex: number,
-  maxRetries: number,
-  chunkHash: string | null,
-  ctx: PipelineContext,
-): Promise<string> {
-  const requestTimeoutMs = getRequestTimeoutMs(ctx.provider);
-  let strictRetryMode = false;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const translatedText = await translateChunkOnce(
-        chunk,
-        strictRetryMode,
-        requestTimeoutMs,
-        ctx,
-      );
-      const qualityRetryDelayMs = getQualityRetryDelayMs(
-        translatedText,
-        chunk,
-        attempt,
-        maxRetries,
-      );
-      if (qualityRetryDelayMs !== null) {
-        strictRetryMode = true;
-        await sleep(qualityRetryDelayMs);
-        continue;
-      }
-
-      if (chunkHash) {
-        setCacheTranslation(chunkHash, ctx.model, ctx.provider, translatedText);
-      }
-      return translatedText;
-    } catch (translationError) {
-      const resolution = await resolveTranslationAttemptError(
-        translationError,
-        attempt,
-        maxRetries,
-        chunk,
-        chunkIndex,
-        ctx,
-      );
-      if (resolution.action === "split") return resolution.text;
-    }
-  }
-
-  throw new Error("Không thể dịch đoạn này");
 }
 
 async function runChunkPipeline(
@@ -1360,11 +1368,12 @@ async function runChunkPipeline(
             );
             const translatedText = await translateChunkWithRetry(
               chunk,
-              index,
               3,
-              chunkHash,
-              ctx,
+              buildEngineParams(ctx),
+              requestChatCompletions,
+              (delta) => addUsageDelta(ctx, delta),
             );
+            setCacheTranslation(chunkHash, model, provider, translatedText);
             results[index] = translatedText;
             set({ translatedChunks: results.slice() });
             addLogEntry(get, set, `✓ Hoàn thành đoạn ${index + 1}`, "success");
@@ -1474,10 +1483,10 @@ async function retryFailedChunkAtIndex(
   try {
     const retranslated = await translateChunkWithRetry(
       originalChunkText,
-      index,
       2,
-      null,
-      options,
+      buildEngineParams(options),
+      requestChatCompletions,
+      (delta) => addUsageDelta(options, delta),
     );
     const next = options.get().translatedChunks.slice();
     next[index] = retranslated;

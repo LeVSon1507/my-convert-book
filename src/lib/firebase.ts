@@ -69,6 +69,17 @@ export function subscribeToAuthChanges(callback: (user: User | null) => void): (
   return onAuthStateChanged(authInstance, callback);
 }
 
+/** ID token for authenticating requests to server routes (e.g. /api/translate/jobs/*). */
+export async function getCurrentIdToken(): Promise<string | null> {
+  const user = authInstance?.currentUser;
+  if (!user) return null;
+  try {
+    return await user.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
 export async function signIn(email: string, password: string): Promise<void> {
   if (!authInstance) throw new Error("Firebase chưa được khởi tạo. Tải lại trang và thử lại.");
   await signInWithEmailAndPassword(authInstance, email, password);

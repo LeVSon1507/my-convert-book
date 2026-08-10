@@ -351,6 +351,7 @@ function CostPreview() {
 function TranslationActions() {
   const fileContent = useTranslationStore((s) => s.fileContent);
   const isRunning = useTranslationStore((s) => s.isRunning);
+  const activeJobId = useTranslationStore((s) => s.activeJobId);
   const completedChunks = useTranslationStore((s) => s.completedChunks);
   const pendingResumeCheckpoint = useTranslationStore((s) => s.pendingResumeCheckpoint);
   const startTranslation = useTranslationStore((s) => s.startTranslation);
@@ -380,6 +381,14 @@ function TranslationActions() {
           </button>
         </div>
       )}
+      {activeJobId && (
+        <div className="alert alert-success visible">
+          <span>
+            🖥️ Đang dịch nền trên server — bạn có thể đóng trình duyệt hoặc tắt màn
+            hình, bản dịch vẫn tiếp tục. Mở lại trang này để xem tiến độ.
+          </span>
+        </div>
+      )}
       <div className="button-row">
         <button
           className="btn btn-primary btn-lg"
@@ -393,7 +402,7 @@ function TranslationActions() {
         <button
           className="btn btn-danger"
           disabled={!isRunning}
-          onClick={stopTranslation}
+          onClick={() => void stopTranslation()}
           type="button"
         >
           Dừng
@@ -501,6 +510,16 @@ function TranslationResult() {
 }
 
 export function TranslateWorkspace() {
+  const user = useAuthStore((s) => s.user);
+  const resumeActiveBackendJob = useTranslationStore((s) => s.resumeActiveBackendJob);
+
+  // Reattaches to a still-running backend job on load — this is what makes a
+  // translation started earlier (then the tab closed or the screen locked) show
+  // up as already-in-progress instead of looking like nothing ever happened.
+  useEffect(() => {
+    if (user) void resumeActiveBackendJob();
+  }, [user, resumeActiveBackendJob]);
+
   return (
     <>
       <ProviderAndModel />
