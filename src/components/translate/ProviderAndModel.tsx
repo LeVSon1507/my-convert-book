@@ -5,6 +5,7 @@ import {
   OPENROUTER_MODEL_GROUPS,
   PROVIDER_CONFIGS,
   ProviderId,
+  ensureOpenRouterPricingLoaded,
 } from "@/lib/providers";
 import { useAuthStore } from "@/store/authStore";
 import { useTranslationStore } from "@/store/translationStore";
@@ -45,6 +46,23 @@ export function ProviderAndModel() {
     provider === "openrouter"
       ? (OPENROUTER_MODEL_GROUPS[openrouterGroup]?.models ?? config.models)
       : config.models;
+
+  useEffect(() => {
+    if (provider !== "openrouter") return;
+    let cancelled = false;
+    // Fire-and-forget: refreshes the module-level pricing cache in providers.ts
+    // (12h TTL) so getModelPricing() — used by both the cost preview and real
+    // post-translation cost — reflects OpenRouter's live prices instead of the
+    // static fallback table. Force a store notify afterward so CostPreview
+    // (which reads pricing synchronously) picks up the change without
+    // requiring an unrelated state edit first.
+    void ensureOpenRouterPricingLoaded().then(() => {
+      if (!cancelled) useTranslationStore.setState({});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
 
   useEffect(() => {
     let cancelled = false;

@@ -43,7 +43,11 @@ type ChatResponseChoice = {
 type ChatResponseData = {
   choices?: unknown;
   output_text?: unknown;
+  candidates?: unknown;
 };
+
+type GeminiPart = { text?: unknown };
+type GeminiCandidate = { content?: { parts?: unknown } };
 
 function firstChoice(responseData: ChatResponseData): ChatResponseChoice | null {
   if (!Array.isArray(responseData.choices)) return null;
@@ -51,6 +55,21 @@ function firstChoice(responseData: ChatResponseData): ChatResponseChoice | null 
   return choice && typeof choice === "object"
     ? (choice as ChatResponseChoice)
     : null;
+}
+
+function extractGeminiText(responseData: ChatResponseData): string {
+  if (!Array.isArray(responseData.candidates)) return "";
+  const [candidate] = responseData.candidates as GeminiCandidate[];
+  const parts = candidate?.content?.parts;
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const text = (part as GeminiPart).text;
+      return typeof text === "string" ? text : "";
+    })
+    .join("")
+    .trim();
 }
 
 export const OPENROUTER_MODEL_GROUPS: Record<
@@ -157,9 +176,9 @@ export const PROVIDER_CONFIGS: Record<ProviderId, ProviderConfig> = {
     ],
   },
   gemini: {
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     defaultModel: "gemini-2.5-pro-preview-03-25",
-    hint: "API key tại aistudio.google.com/app/apikey",
+    hint: "API key tại aistudio.google.com/app/apikey — gọi endpoint gốc Gemini, đã tắt safety filters (BLOCK_NONE) để tránh từ chối oan nội dung truyện dark/nhạy cảm",
     models: [
       {
         id: "gemini-2.5-pro-preview-03-25",
@@ -243,6 +262,19 @@ export const PROVIDER_CONFIGS: Record<ProviderId, ProviderConfig> = {
     ],
   },
 };
+
+export type GeminiSafetySetting = { category: string; threshold: string };
+
+// Gemini's OpenAI-compat shim can't set this, so translation calls hit default
+// moderation thresholds and refuse ordinary dark/violent novel content. BLOCK_NONE
+// covers the toggleable categories; a few (e.g. CSAM) stay non-configurable regardless.
+export const GEMINI_SAFETY_SETTINGS: GeminiSafetySetting[] = [
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+];
 
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "grok-3-mini": 128000,
@@ -338,7 +370,9 @@ export async function ensureOpenRouterPricingLoaded() {
   }
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/models");
+    const response = await fetch("https://openrouter.ai/api/v1/models", {
+      signal: AbortSignal.timeout(8000),
+    });
     if (!response.ok) return openRouterPricingMap;
     const payload = (await response.json()) as OpenRouterModelsResponse;
     const data = Array.isArray(payload?.data) ? payload.data : [];
@@ -430,6 +464,9 @@ export function extractAssistantText(responseData: unknown): string {
 
   const outputText = parsed.output_text;
   if (typeof outputText === "string" && outputText.trim()) return outputText;
+
+  const geminiText = extractGeminiText(parsed);
+  if (geminiText) return geminiText;
 
   return "";
 }

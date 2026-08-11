@@ -274,9 +274,19 @@ export function hasSevereRepetition(translatedText: string): boolean {
  * global — callers in 09a-translate-chunk.js invoke it as a top-level function, which
  * would throw ReferenceError at runtime. Restored as a standalone function here.
  */
-export function hasTruncatedOutput(translatedText: string): boolean {
+export function hasTruncatedOutput(translatedText: string, sourceChunk = ""): boolean {
   const text = (translatedText || "").trim();
   if (!text) return false;
+
+  // A model that stops early can still end on a grammatically complete,
+  // properly-punctuated sentence (observed: Grok announcing "tôi sẽ chia
+  // thành nhiều phần" mid-translation then closing that sentence with "?"),
+  // which defeats every check below since they only look at how the text
+  // ends. Convert-Hán-Việt output runs roughly as long as the source or
+  // longer, so output well under half the source length is truncated
+  // regardless of how tidy its last sentence looks.
+  const sourceLength = sourceChunk.trim().length;
+  if (sourceLength > 200 && text.length < sourceLength * 0.45) return true;
 
   const lastChar = text.at(-1) ?? "";
   if (VALID_LINE_ENDINGS.includes(lastChar)) return false;

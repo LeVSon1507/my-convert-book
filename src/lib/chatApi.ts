@@ -1,18 +1,51 @@
 export type ChatProvider = "grok" | "openai" | "gemini" | "openrouter" | "ollama" | "huggingface";
 
-async function callChatApiDirect(
+// Gemini's native generateContent endpoint takes the model in the URL path, not the body.
+function buildGeminiRequest(
+  baseUrl: string,
+  apiKey: string,
+  payload: object,
+): { url: string; headers: Record<string, string>; body: unknown } {
+  const { model, ...body } = payload as Record<string, unknown> & { model?: string };
+  return {
+    url: `${baseUrl}/models/${encodeURIComponent(model ?? "")}:generateContent`,
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body,
+  };
+}
+
+/**
+ * Calls the provider's chat endpoint directly — no CORS proxy indirection.
+ * Safe to use both from the browser (Ollama is always local so it never needs the
+ * proxy) and from server routes (no CORS concept server-side, so this is *always*
+ * what backend translation jobs use).
+ */
+export async function callChatApiDirect(
   provider: string,
   baseUrl: string,
   apiKey: string,
   payload: object,
   signal: AbortSignal,
 ): Promise<Response> {
-  const isOllama = provider === "ollama";
-  const targetUrl = isOllama ? `${baseUrl}/api/chat` : `${baseUrl}/chat/completions`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (!isOllama) headers.Authorization = `Bearer ${apiKey}`;
+  if (provider === "ollama") {
+    return fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify(payload),
+    });
+  }
 
-  return fetch(targetUrl, { method: "POST", headers, signal, body: JSON.stringify(payload) });
+  if (provider === "gemini") {
+    const { url, headers, body } = buildGeminiRequest(baseUrl, apiKey, payload);
+    return fetch(url, { method: "POST", headers, signal, body: JSON.stringify(body) });
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  return fetch(`${baseUrl}/chat/completions`, { method: "POST", headers, signal, body: JSON.stringify(payload) });
 }
 
 async function callChatApiViaProxy(

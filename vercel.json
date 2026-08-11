@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/resume-stalled-jobs",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
