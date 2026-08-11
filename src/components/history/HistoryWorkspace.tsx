@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   deleteCloudFile,
   downloadCloudFileText,
+  getCurrentIdToken,
   loadResumeCheckpoint,
 } from "@/lib/firebase";
 import { exportAs } from "@/lib/export";
@@ -12,6 +13,45 @@ import {
   TranslationResumeCheckpoint,
   useTranslationStore,
 } from "@/store/translationStore";
+
+type ActiveBackendJob = {
+  id: string;
+  fileName: string;
+  totalChunks: number;
+  done: number;
+};
+
+/** Jobs still running server-side (translationJobs collection) — a separate
+ *  data model from the completed-only cloud history above, so this needs its
+ *  own fetch. See src/lib/translationJobs.ts. */
+async function fetchActiveBackendJobs(): Promise<ActiveBackendJob[]> {
+  const idToken = await getCurrentIdToken();
+  if (!idToken) return [];
+
+  const listResponse = await fetch("/api/translate/jobs?status=running", {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (!listResponse.ok) return [];
+  const { jobs } = (await listResponse.json()) as {
+    jobs?: { id: string; fileName: string; totalChunks: number }[];
+  };
+  if (!jobs?.length) return [];
+
+  const withProgress = await Promise.all(
+    jobs.map(async (job) => {
+      const detailResponse = await fetch(`/api/translate/jobs/${job.id}`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!detailResponse.ok) return { ...job, done: 0 };
+      const { progress } = (await detailResponse.json()) as {
+        progress?: { done?: number; permanentlyFailed?: number };
+      };
+      const done = (progress?.done ?? 0) + (progress?.permanentlyFailed ?? 0);
+      return { ...job, done };
+    }),
+  );
+  return withProgress;
+}
 
 const TRANSLATION_HISTORY_KEY = "translation_history_v1";
 
@@ -89,15 +129,55 @@ export function HistoryWorkspace({
   const resumeFromCheckpoint = useTranslationStore(
     (s) => s.resumeFromCheckpoint,
   );
+  const attachToBackendJob = useTranslationStore((s) => s.attachToBackendJob);
   const [localHistory, setLocalHistory] = useState<LocalHistoryEntry[]>(() =>
     readLocalHistory(),
   );
+  const [activeJobs, setActiveJobs] = useState<ActiveBackendJob[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (user) void refreshCloudHistory();
   }, [refreshCloudHistory, user]);
+
+  useEffect(() => {
+    if (!user) {
+      setActiveJobs([]);
+      return;
+    }
+    void fetchActiveBackendJobs().then(setActiveJobs);
+  }, [user]);
+
+  async function viewActiveJobProgress(jobId: string) {
+    await attachToBackendJob(jobId);
+    onResume?.();
+  }
+
+  async function downloadActiveJobPartial(jobId: string, fileName: string) {
+    if (!user) return;
+    setMessage("");
+    setError("");
+    try {
+      const idToken = await getCurrentIdToken();
+      if (!idToken) throw new Error("Chưa đăng nhập.");
+      const response = await fetch(`/api/translate/jobs/${jobId}/text`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { text } = (await response.json()) as { text?: string };
+      if (!text) throw new Error("Chưa có đoạn nào dịch xong.");
+      await exportAs([text], `${baseName(fileName)}_partial_vietnamese`, "txt");
+    } catch (downloadError) {
+      setError(
+        `Không tải được bản dịch dở: ${
+          downloadError instanceof Error
+            ? downloadError.message
+            : String(downloadError)
+        }`,
+      );
+    }
+  }
 
   const sortedLocalHistory = useMemo(
     () =>
@@ -309,6 +389,45 @@ export function HistoryWorkspace({
       </div>
       {message && <div className="alert alert-success visible">{message}</div>}
       {error && <div className="alert alert-error visible">{error}</div>}
+
+      {user && activeJobs.length > 0 && (
+        <>
+          <div className="history-section-label">
+            Đang chạy trên server ({activeJobs.length})
+          </div>
+          {activeJobs.map((job) => (
+            <div className="history-item" key={job.id}>
+              <div className="history-item-info">
+                <div className="history-item-name" title={job.fileName}>
+                  {job.fileName}
+                </div>
+                <div className="history-item-meta">
+                  {job.done}/{job.totalChunks} đoạn · đang dịch nền
+                </div>
+              </div>
+              <div className="history-item-actions">
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => void viewActiveJobProgress(job.id)}
+                  type="button"
+                >
+                  Xem tiến độ
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={job.done === 0}
+                  onClick={() =>
+                    void downloadActiveJobPartial(job.id, job.fileName)
+                  }
+                  type="button"
+                >
+                  Tải tạm
+                </button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
 
       {user ? (
         <>

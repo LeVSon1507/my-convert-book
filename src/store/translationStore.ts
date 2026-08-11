@@ -389,6 +389,11 @@ type TranslationState = {
   /** Reattaches to a still-running backend job after sign-in or a page reload —
    *  this is what makes "tắt màn hình vẫn dịch tiếp được" visible to the user. */
   resumeActiveBackendJob: () => Promise<void>;
+  /** Same reattachment as resumeActiveBackendJob, but for a specific job id —
+   *  used by HistoryWorkspace's "Đang chạy trên server" list so a job started
+   *  earlier is reachable even if the auto-reconnect-on-mount didn't fire
+   *  (wrong tab on reload, multiple running jobs, etc). */
+  attachToBackendJob: (jobId: string) => Promise<void>;
 };
 
 type TranslationGetter = () => TranslationState;
@@ -825,6 +830,28 @@ function startBackendJobPolling(
   backendPollTimer = setInterval(() => void pollBackendJobOnce(jobId, get, set), POLL_INTERVAL_MS);
 }
 
+async function attachToBackendJobId(
+  jobId: string,
+  get: TranslationGetter,
+  set: TranslationSetter,
+): Promise<void> {
+  set({
+    activeJobId: jobId,
+    isRunning: true,
+    isStopped: false,
+    progressVisible: true,
+    resultVisible: false,
+    error: "",
+  });
+  addLogEntry(
+    get,
+    set,
+    "🖥️ Đã kết nối lại job dịch nền đang chạy — vẫn dịch tiếp khi bạn đóng tab trước đó.",
+    "accent",
+  );
+  startBackendJobPolling(jobId, get, set);
+}
+
 async function stopBackendJob(jobId: string): Promise<void> {
   const idToken = await getCurrentIdToken();
   if (!idToken) return;
@@ -1183,24 +1210,15 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
       const job = data.jobs?.[0];
       if (!job) return;
 
-      set({
-        activeJobId: job.id,
-        isRunning: true,
-        isStopped: false,
-        progressVisible: true,
-        resultVisible: false,
-        error: "",
-      });
-      addLogEntry(
-        get,
-        set,
-        "🖥️ Đã kết nối lại job dịch nền đang chạy — vẫn dịch tiếp khi bạn đóng tab trước đó.",
-        "accent",
-      );
-      startBackendJobPolling(job.id, get, set);
+      await attachToBackendJobId(job.id, get, set);
     } catch {
       // Best-effort reconnect — the job keeps running server-side regardless.
     }
+  },
+
+  async attachToBackendJob(jobId) {
+    if (get().activeJobId || get().isRunning) return;
+    await attachToBackendJobId(jobId, get, set);
   },
 
   resumeFromCheckpoint(checkpoint) {
