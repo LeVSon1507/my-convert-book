@@ -15,7 +15,10 @@ import {
   type WorkItem,
 } from "@/lib/translationJobs";
 import { callChatApiDirect } from "@/lib/chatApi";
-import { ensureOpenRouterPricingLoaded, shouldSkipTranslation } from "@/lib/providers";
+import {
+  ensureOpenRouterPricingLoaded,
+  shouldSkipTranslation,
+} from "@/lib/providers";
 import {
   translateChunkWithRetry,
   type EngineParams,
@@ -37,6 +40,11 @@ import { saveTranslationServer } from "@/lib/translationHistoryAdmin";
 
 const TICK_BUDGET_MS = 45_000;
 const MAX_TRANSLATE_ATTEMPTS_PER_CHUNK = 3;
+
+async function isJobRunning(jobId: string): Promise<boolean> {
+  const latestJob = await getTranslationJob(jobId);
+  return latestJob?.status === "running";
+}
 
 function getBaseUrl(): string {
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
@@ -63,12 +71,21 @@ async function processOneChunk(
   chunk: { index: number; source: string },
   params: EngineParams,
 ): Promise<void> {
+  if (!(await isJobRunning(job.id))) {
+    return;
+  }
+
   if (shouldSkipTranslation(chunk.source)) {
+    if (!(await isJobRunning(job.id))) {
+      return;
+    }
     await writeChunkSuccess(job.id, chunk.index, chunk.source, {
       promptTokens: 0,
       completionTokens: 0,
       cost: 0,
-    }).catch((e) => console.error(`[job ${job.id}] writeChunkSuccess (skip) failed`, e));
+    }).catch((e) =>
+      console.error(`[job ${job.id}] writeChunkSuccess (skip) failed`, e),
+    );
     return;
   }
 
@@ -87,6 +104,9 @@ async function processOneChunk(
         };
       },
     );
+    if (!(await isJobRunning(job.id))) {
+      return;
+    }
     await writeChunkSuccess(job.id, chunk.index, translated, usage);
     await appendJobLog(
       job.id,
@@ -95,12 +115,17 @@ async function processOneChunk(
     ).catch(() => {});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (!(await isJobRunning(job.id))) {
+      return;
+    }
     await writeChunkFailure(job.id, chunk.index, message).catch((e) =>
       console.error(`[job ${job.id}] writeChunkFailure failed`, e),
     );
-    await appendJobLog(job.id, `✗ Lỗi đoạn ${chunk.index + 1}: ${message}`, "error").catch(
-      () => {},
-    );
+    await appendJobLog(
+      job.id,
+      `✗ Lỗi đoạn ${chunk.index + 1}: ${message}`,
+      "error",
+    ).catch(() => {});
   }
 }
 
@@ -159,9 +184,14 @@ async function advanceScheduler(
   deadline: number,
   state: SchedulerState,
 ): Promise<boolean> {
-  const needsRefill = state.queue.length === 0 && state.inFlight.size < concurrency;
+  const needsRefill =
+    state.queue.length === 0 && state.inFlight.size < concurrency;
   if (needsRefill && Date.now() < deadline) {
-    const nextBatch = await refillWorkQueue(jobId, concurrency, state.inFlight.size);
+    const nextBatch = await refillWorkQueue(
+      jobId,
+      concurrency,
+      state.inFlight.size,
+    );
     if (nextBatch === null) return false;
     // Got fresh work — report back so the caller launches it. If it came
     // back empty but chunks are still finishing (the job's tail end), fall
@@ -207,7 +237,12 @@ async function processAvailableWork(
       launch(state.queue.shift() as WorkItem);
     }
 
-    const shouldContinue = await advanceScheduler(job.id, concurrency, deadline, state);
+    const shouldContinue = await advanceScheduler(
+      job.id,
+      concurrency,
+      deadline,
+      state,
+    );
     if (!shouldContinue) break;
   }
 
@@ -216,7 +251,9 @@ async function processAvailableWork(
   await Promise.allSettled(state.inFlight.keys());
 }
 
-async function finalizeJob(job: TranslationJobDoc & { id: string }): Promise<void> {
+async function finalizeJob(
+  job: TranslationJobDoc & { id: string },
+): Promise<void> {
   const orderedTexts = await getOrderedChunkTexts(job.id, job.totalChunks);
   const finalText = buildFinalTextFromChunks(orderedTexts);
   const progress = await getJobProgress(job.id);
@@ -241,7 +278,7 @@ export async function runJobTick(jobId: string): Promise<void> {
 
   try {
     const job = await getTranslationJob(jobId);
-    if (!job || job.status !== "running") return;
+    if (job?.status !== "running") return;
 
     // Serverless function instances don't share memory with the browser, so
     // the client's own pricing refresh (see ProviderAndModel.tsx) never
@@ -262,7 +299,9 @@ export async function runJobTick(jobId: string): Promise<void> {
 
     if (latest.status === "stopping") {
       await updateTranslationJob(jobId, { status: "stopped" });
-      await appendJobLog(jobId, "Đã dừng bởi người dùng.", "warning").catch(() => {});
+      await appendJobLog(jobId, "Đã dừng bởi người dùng.", "warning").catch(
+        () => {},
+      );
       return;
     }
 

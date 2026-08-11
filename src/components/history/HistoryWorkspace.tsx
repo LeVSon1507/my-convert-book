@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteCloudFile,
@@ -100,6 +101,100 @@ function baseName(fileName: string): string {
   return fileName.replace(/\.[^.]+$/, "") || "translated";
 }
 
+type HistoryBadgeTone = "done" | "progress" | "failed";
+
+type HistoryStatusBadge = {
+  label: string;
+  tone: HistoryBadgeTone;
+  percent: number;
+};
+
+type HistoryGroup<RecordType> = {
+  fileName: string;
+  records: RecordType[];
+};
+
+function toPercent(completedCount: number, totalCount: number): number {
+  if (!totalCount) return 0;
+  return Math.max(
+    0,
+    Math.min(100, Math.round((completedCount / totalCount) * 100)),
+  );
+}
+
+function resolveCloudStatusBadge(
+  statusText: string,
+  completedCount: number,
+  totalCount: number,
+): HistoryStatusBadge {
+  const isFailedStatus = statusText === "error" || statusText === "failed";
+  if (isFailedStatus) {
+    return { label: "Failed", tone: "failed", percent: 0 };
+  }
+
+  const hasProgress =
+    statusText === "in_progress" ||
+    (totalCount > 0 && completedCount > 0 && completedCount < totalCount);
+  if (hasProgress) {
+    const progressLabel = totalCount
+      ? `In Progress · ${completedCount}/${totalCount}`
+      : "In Progress";
+    return {
+      label: progressLabel,
+      tone: "progress",
+      percent: toPercent(completedCount, totalCount),
+    };
+  }
+
+  return { label: "Done · 100%", tone: "done", percent: 100 };
+}
+
+function resolveLocalStatusBadge(
+  statusText: string,
+  completedCount: number,
+  totalCount: number,
+): HistoryStatusBadge {
+  if (statusText === "failed") {
+    return { label: "Failed", tone: "failed", percent: 0 };
+  }
+
+  if (statusText === "in_progress") {
+    const progressLabel = totalCount
+      ? `In Progress · ${completedCount}/${totalCount}`
+      : "In Progress";
+    return {
+      label: progressLabel,
+      tone: "progress",
+      percent: toPercent(completedCount, totalCount),
+    };
+  }
+
+  return { label: "Done · 100%", tone: "done", percent: 100 };
+}
+
+function groupRecordsByFileName<RecordType extends { fileName?: string }>(
+  records: RecordType[],
+): HistoryGroup<RecordType>[] {
+  const groupedRecords = new Map<string, RecordType[]>();
+
+  records.forEach((recordValue) => {
+    const fileNameValue =
+      typeof recordValue.fileName === "string" && recordValue.fileName.trim()
+        ? recordValue.fileName
+        : "unknown.txt";
+    const existingGroup = groupedRecords.get(fileNameValue) ?? [];
+    existingGroup.push(recordValue);
+    groupedRecords.set(fileNameValue, existingGroup);
+  });
+
+  return Array.from(groupedRecords.entries()).map(
+    ([fileNameValue, groupedEntries]) => ({
+      fileName: fileNameValue,
+      records: groupedEntries,
+    }),
+  );
+}
+
 type HistoryWorkspaceProps = {
   onResume?: () => void;
 };
@@ -142,12 +237,14 @@ export function HistoryWorkspace({
   }, [refreshCloudHistory, user]);
 
   useEffect(() => {
-    if (!user) {
-      setActiveJobs([]);
-      return;
-    }
+    if (!user) return;
     void fetchActiveBackendJobs().then(setActiveJobs);
   }, [user]);
+
+  const visibleActiveJobs = useMemo(
+    () => (user ? activeJobs : []),
+    [activeJobs, user],
+  );
 
   async function viewActiveJobProgress(jobId: string) {
     await attachToBackendJob(jobId);
@@ -186,6 +283,50 @@ export function HistoryWorkspace({
         .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0)),
     [localHistory],
   );
+
+  const groupedRunningJobs = useMemo(
+    () =>
+      groupRecordsByFileName(
+        visibleActiveJobs.map((activeJob) => ({
+          ...activeJob,
+          fileName: activeJob.fileName,
+        })),
+      ),
+    [visibleActiveJobs],
+  );
+
+  const groupedCloudHistory = useMemo(
+    () =>
+      groupRecordsByFileName(
+        cloudHistory.map((cloudEntry) => ({
+          ...cloudEntry,
+          fileName:
+            typeof cloudEntry.fileName === "string"
+              ? cloudEntry.fileName
+              : "unknown.txt",
+        })),
+      ),
+    [cloudHistory],
+  );
+
+  const groupedLocalHistory = useMemo(
+    () =>
+      groupRecordsByFileName(
+        sortedLocalHistory.map((localEntry) => ({
+          ...localEntry,
+          fileName:
+            typeof localEntry.fileName === "string"
+              ? localEntry.fileName
+              : "unknown.txt",
+        })),
+      ),
+    [sortedLocalHistory],
+  );
+
+  const hasCompletelyEmptyHistory =
+    visibleActiveJobs.length === 0 &&
+    cloudHistory.length === 0 &&
+    sortedLocalHistory.length === 0;
 
   async function downloadCloudItem(
     id: string,
@@ -383,206 +524,418 @@ export function HistoryWorkspace({
   }
 
   return (
-    <div className="card">
+    <div className="card history-dashboard-card">
       <div className="card-title">
         <span className="icon">↺</span> Lịch sử dịch
       </div>
       {message && <div className="alert alert-success visible">{message}</div>}
       {error && <div className="alert alert-error visible">{error}</div>}
 
-      {user && activeJobs.length > 0 && (
-        <>
-          <div className="history-section-label">
-            Đang chạy trên server ({activeJobs.length})
+      {hasCompletelyEmptyHistory ? (
+        <div className="history-empty history-empty-hero">
+          <Image
+            src="/undraw-img/undraw-history-empty.svg"
+            alt="History empty illustration"
+            className="illustration history-empty-illustration"
+            width={140}
+            height={100}
+            priority={false}
+          />
+          <div>
+            Chưa có bản dịch nào trong lịch sử.
+            <br />
+            <small>
+              {user
+                ? "Dịch xong một file để bắt đầu lưu lịch sử cloud và local."
+                : "Đăng nhập và dịch file đầu tiên để xem lịch sử tại đây."}
+            </small>
           </div>
-          {activeJobs.map((job) => (
-            <div className="history-item" key={job.id}>
-              <div className="history-item-info">
-                <div className="history-item-name" title={job.fileName}>
-                  {job.fileName}
-                </div>
-                <div className="history-item-meta">
-                  {job.done}/{job.totalChunks} đoạn · đang dịch nền
-                </div>
-              </div>
-              <div className="history-item-actions">
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => void viewActiveJobProgress(job.id)}
-                  type="button"
-                >
-                  Xem tiến độ
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={job.done === 0}
-                  onClick={() =>
-                    void downloadActiveJobPartial(job.id, job.fileName)
-                  }
-                  type="button"
-                >
-                  Tải tạm
-                </button>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-
-      {user ? (
+        </div>
+      ) : (
         <>
-          <div className="history-section-label">
-            Cloud — đồng bộ mọi thiết bị ({cloudHistory.length})
-          </div>
-          {cloudHistory.length ? (
-            cloudHistory.map((item) => {
-              const fileName = item.fileName || "unknown.txt";
-              const completedChunks = Number(item.completedChunks) || 0;
-              const totalChunks = Number(item.totalChunks) || 0;
-              const isInProgress =
-                item.status === "in_progress" ||
-                (completedChunks > 0 && totalChunks > completedChunks);
-              const chunkCount = Number(item.textChunkCount) || 0;
-              const checkpointChunkCount =
-                Number(item.checkpointChunkCount) || 0;
+          {user && groupedRunningJobs.length > 0 && (
+            <>
+              <div className="history-section-label">
+                Đang chạy trên server ({visibleActiveJobs.length})
+              </div>
 
-              return (
-                <div className="history-item" key={item.id}>
-                  <div className="history-item-info">
-                    <div className="history-item-name" title={fileName}>
-                      {fileName}
-                    </div>
-                    <div className="history-item-meta">
-                      {formatCloudDate(item.updatedAt || item.completedAt)}
-                      {item.model ? ` · ${String(item.model)}` : ""}
-                      {totalChunks
-                        ? ` · ${completedChunks}/${totalChunks} đoạn`
-                        : ""}
-                    </div>
-                    <div className="history-item-meta">
-                      {item.status || "completed"}
-                      {isInProgress ? " · dở dang" : ""}
-                    </div>
+              {groupedRunningJobs.map((runningGroup, runningGroupIndex) => (
+                <details
+                  className="history-group-card"
+                  key={`${runningGroup.fileName}-${runningGroupIndex}`}
+                  open
+                >
+                  <summary className="history-group-summary">
+                    <span
+                      className="history-group-title"
+                      title={runningGroup.fileName}
+                    >
+                      {runningGroup.fileName}
+                    </span>
+                    <span className="history-group-summary-right">
+                      <span className="history-status-badge progress">
+                        In Progress
+                      </span>
+                      <span className="history-group-count">
+                        {runningGroup.records.length} tiến trình
+                      </span>
+                    </span>
+                  </summary>
+
+                  <div className="history-group-body">
+                    {runningGroup.records.map((runningJob) => {
+                      const runningPercent = toPercent(
+                        runningJob.done,
+                        runningJob.totalChunks,
+                      );
+                      return (
+                        <div className="history-row" key={runningJob.id}>
+                          <div className="history-row-main">
+                            <div className="history-row-title">
+                              Job #{runningJob.id}
+                            </div>
+                            <div className="history-row-meta">
+                              {runningJob.done}/{runningJob.totalChunks} đoạn
+                            </div>
+                            <div className="history-progress-mini">
+                              <div
+                                className="history-progress-mini-fill"
+                                style={{ width: `${runningPercent}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="history-row-actions">
+                            <button
+                              className="history-icon-btn"
+                              onClick={() =>
+                                void viewActiveJobProgress(runningJob.id)
+                              }
+                              type="button"
+                              title="Xem tiến độ"
+                              aria-label="Xem tiến độ"
+                            >
+                              👁
+                            </button>
+                            <button
+                              className="history-icon-btn"
+                              disabled={runningJob.done === 0}
+                              onClick={() =>
+                                void downloadActiveJobPartial(
+                                  runningJob.id,
+                                  runningJob.fileName,
+                                )
+                              }
+                              type="button"
+                              title="Tải tạm"
+                              aria-label="Tải tạm"
+                            >
+                              ⬇
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="history-item-actions">
-                    {isInProgress && checkpointChunkCount > 0 && (
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() =>
-                          void resumeCloudItem(item.id, checkpointChunkCount)
-                        }
-                        type="button"
+                </details>
+              ))}
+            </>
+          )}
+
+          {user ? (
+            <>
+              <div className="history-section-label">
+                Cloud — đồng bộ mọi thiết bị ({cloudHistory.length})
+              </div>
+              {groupedCloudHistory.length > 0 ? (
+                groupedCloudHistory.map((cloudGroup, cloudGroupIndex) => (
+                  <details
+                    className="history-group-card"
+                    key={`${cloudGroup.fileName}-${cloudGroupIndex}`}
+                    open={cloudGroupIndex === 0}
+                  >
+                    <summary className="history-group-summary">
+                      <span
+                        className="history-group-title"
+                        title={cloudGroup.fileName}
                       >
-                        Tiếp tục
-                      </button>
-                    )}
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      disabled={!chunkCount}
-                      onClick={() =>
-                        void downloadCloudItem(item.id, fileName, chunkCount)
-                      }
-                      type="button"
-                    >
-                      Tải về
-                    </button>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      onClick={() =>
-                        void deleteCloudItem(
-                          item.id,
-                          chunkCount,
-                          checkpointChunkCount,
-                        )
-                      }
-                      type="button"
-                    >
-                      Xóa
-                    </button>
-                  </div>
+                        {cloudGroup.fileName}
+                      </span>
+                      <span className="history-group-summary-right">
+                        <span className="history-group-count">
+                          {cloudGroup.records.length} bản lưu
+                        </span>
+                      </span>
+                    </summary>
+
+                    <div className="history-group-body">
+                      {cloudGroup.records.map((cloudRecord) => {
+                        const cloudRecordMeta = cloudRecord as Record<
+                          string,
+                          unknown
+                        >;
+                        const cloudModelRaw = cloudRecordMeta.model;
+                        const cloudModelLabel =
+                          typeof cloudModelRaw === "string"
+                            ? cloudModelRaw
+                            : "";
+                        const completedChunkCount =
+                          Number(cloudRecord.completedChunks) || 0;
+                        const totalChunkCount =
+                          Number(cloudRecord.totalChunks) || 0;
+                        const statusText =
+                          typeof cloudRecord.status === "string"
+                            ? cloudRecord.status
+                            : "completed";
+                        const cloudBadge = resolveCloudStatusBadge(
+                          statusText,
+                          completedChunkCount,
+                          totalChunkCount,
+                        );
+                        const textChunkCount =
+                          Number(cloudRecord.textChunkCount) || 0;
+                        const checkpointChunkCount =
+                          Number(cloudRecord.checkpointChunkCount) || 0;
+                        const canResumeCloudItem =
+                          cloudBadge.tone === "progress" &&
+                          checkpointChunkCount > 0;
+                        const updatedAtValue = cloudRecordMeta.updatedAt;
+                        const completedAtValue = cloudRecordMeta.completedAt;
+
+                        return (
+                          <div className="history-row" key={cloudRecord.id}>
+                            <div className="history-row-main">
+                              <div className="history-row-title">
+                                {formatCloudDate(
+                                  updatedAtValue || completedAtValue,
+                                )}
+                              </div>
+                              <div className="history-row-meta">
+                                {cloudModelLabel ? `${cloudModelLabel} · ` : ""}
+                                {totalChunkCount
+                                  ? `${completedChunkCount}/${totalChunkCount} đoạn`
+                                  : "Không có số đoạn"}
+                              </div>
+                              <div
+                                className={`history-status-badge ${cloudBadge.tone}`}
+                              >
+                                {cloudBadge.label}
+                              </div>
+                              {cloudBadge.tone === "progress" &&
+                                totalChunkCount > 0 && (
+                                  <div className="history-progress-mini">
+                                    <div
+                                      className="history-progress-mini-fill"
+                                      style={{
+                                        width: `${cloudBadge.percent}%`,
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                            </div>
+
+                            <div className="history-row-actions">
+                              {canResumeCloudItem && (
+                                <button
+                                  className="history-icon-btn"
+                                  onClick={() =>
+                                    void resumeCloudItem(
+                                      cloudRecord.id,
+                                      checkpointChunkCount,
+                                    )
+                                  }
+                                  type="button"
+                                  title="Tiếp tục"
+                                  aria-label="Tiếp tục"
+                                >
+                                  ▶
+                                </button>
+                              )}
+                              <button
+                                className="history-icon-btn"
+                                disabled={!textChunkCount}
+                                onClick={() =>
+                                  void downloadCloudItem(
+                                    cloudRecord.id,
+                                    cloudGroup.fileName,
+                                    textChunkCount,
+                                  )
+                                }
+                                type="button"
+                                title="Tải về"
+                                aria-label="Tải về"
+                              >
+                                ⬇
+                              </button>
+                              <button
+                                className="history-icon-btn danger"
+                                onClick={() =>
+                                  void deleteCloudItem(
+                                    cloudRecord.id,
+                                    textChunkCount,
+                                    checkpointChunkCount,
+                                  )
+                                }
+                                type="button"
+                                title="Xóa"
+                                aria-label="Xóa"
+                              >
+                                🗑
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                ))
+              ) : (
+                <div className="history-empty">
+                  Chưa có bản dịch nào trên cloud.
+                  <br />
+                  <small>Bản dịch sẽ tự động lưu sau khi hoàn thành.</small>
                 </div>
-              );
-            })
+              )}
+            </>
           ) : (
             <div className="history-empty">
-              Chưa có bản dịch nào trên cloud.
+              Đăng nhập để xem lịch sử cloud.
               <br />
-              <small>Bản dịch sẽ tự động lưu sau khi hoàn thành.</small>
+              <small>Lịch sử local vẫn hiển thị bên dưới nếu có.</small>
+            </div>
+          )}
+
+          <div className="history-section-label history-local-section-label">
+            Chỉ trên thiết bị này
+          </div>
+          {groupedLocalHistory.length > 0 ? (
+            groupedLocalHistory.map((localGroup, localGroupIndex) => (
+              <details
+                className="history-group-card"
+                key={`${localGroup.fileName}-${localGroupIndex}`}
+                open={localGroupIndex === 0}
+              >
+                <summary className="history-group-summary">
+                  <span
+                    className="history-group-title"
+                    title={localGroup.fileName}
+                  >
+                    {localGroup.fileName}
+                  </span>
+                  <span className="history-group-summary-right">
+                    <span className="history-group-count">
+                      {localGroup.records.length} bản lưu
+                    </span>
+                  </span>
+                </summary>
+
+                <div className="history-group-body">
+                  {localGroup.records.map((localRecord, localRecordIndex) => {
+                    const localModelLabel =
+                      typeof localRecord.model === "string"
+                        ? localRecord.model
+                        : "";
+                    const completedChunkCount =
+                      Number(localRecord.completedChunks) || 0;
+                    const totalChunkCount =
+                      Number(localRecord.totalChunks) || 0;
+                    const localStatusText =
+                      typeof localRecord.status === "string"
+                        ? localRecord.status
+                        : "completed";
+                    const localBadge = resolveLocalStatusBadge(
+                      localStatusText,
+                      completedChunkCount,
+                      totalChunkCount,
+                    );
+                    const updatedTimestamp =
+                      localRecord.updatedAt || localRecord.completedAt || 0;
+                    const updatedLabel = updatedTimestamp
+                      ? new Date(updatedTimestamp).toLocaleString("vi-VN")
+                      : "—";
+                    const canResumeLocalItem =
+                      localStatusText === "in_progress" &&
+                      Boolean(localRecord.checkpointKey);
+
+                    return (
+                      <div
+                        className="history-row"
+                        key={
+                          localRecord.historyId ||
+                          `${localGroup.fileName}-${localRecordIndex}`
+                        }
+                      >
+                        <div className="history-row-main">
+                          <div className="history-row-title">
+                            {updatedLabel}
+                          </div>
+                          <div className="history-row-meta">
+                            {localModelLabel || "Model không xác định"}
+                            {totalChunkCount
+                              ? ` · ${completedChunkCount}/${totalChunkCount} đoạn`
+                              : ""}
+                          </div>
+                          <div
+                            className={`history-status-badge ${localBadge.tone}`}
+                          >
+                            {localBadge.label}
+                          </div>
+                          {localBadge.tone === "progress" &&
+                            totalChunkCount > 0 && (
+                              <div className="history-progress-mini">
+                                <div
+                                  className="history-progress-mini-fill"
+                                  style={{ width: `${localBadge.percent}%` }}
+                                />
+                              </div>
+                            )}
+                        </div>
+
+                        <div className="history-row-actions">
+                          {canResumeLocalItem && (
+                            <button
+                              className="history-icon-btn"
+                              onClick={() => resumeLocalItem(localRecord)}
+                              type="button"
+                              title="Tiếp tục"
+                              aria-label="Tiếp tục"
+                            >
+                              ▶
+                            </button>
+                          )}
+                          <button
+                            className="history-icon-btn"
+                            onClick={() => void downloadLocalItem(localRecord)}
+                            type="button"
+                            title="Tải về"
+                            aria-label="Tải về"
+                          >
+                            ⬇
+                          </button>
+                          <button
+                            className="history-icon-btn danger"
+                            onClick={() => deleteLocalItem(localRecord)}
+                            type="button"
+                            title="Xóa"
+                            aria-label="Xóa"
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            ))
+          ) : (
+            <div className="history-empty">
+              Chưa có lịch sử local.
+              <br />
+              <small>Dịch xong một file để tạo bản ghi.</small>
             </div>
           )}
         </>
-      ) : (
-        <div className="history-empty">
-          Đăng nhập để xem lịch sử cloud.
-          <br />
-          <small>Lịch sử local vẫn hiển thị bên dưới nếu có.</small>
-        </div>
-      )}
-
-      <div className="history-section-label" style={{ marginTop: 18 }}>
-        Chỉ trên thiết bị này
-      </div>
-      {sortedLocalHistory.length ? (
-        sortedLocalHistory.map((item, index) => {
-          const fileName = item.fileName || "unknown.txt";
-          const completedChunks = Number(item.completedChunks) || 0;
-          const totalChunks = Number(item.totalChunks) || 0;
-          const timestamp = item.updatedAt || item.completedAt || 0;
-          const when = timestamp
-            ? new Date(timestamp).toLocaleString("vi-VN")
-            : "—";
-          return (
-            <div
-              className="history-item"
-              key={item.historyId || `${fileName}-${index}`}
-            >
-              <div className="history-item-info">
-                <div className="history-item-name">{fileName}</div>
-                <div className="history-item-meta">
-                  {when}
-                  {item.model ? ` · ${item.model}` : ""}
-                </div>
-                <div className="history-item-meta">
-                  {totalChunks
-                    ? `${completedChunks}/${totalChunks} đoạn · `
-                    : ""}
-                  {item.status === "in_progress" ? "Dở dang" : "Hoàn tất"}
-                </div>
-              </div>
-              <div className="history-item-actions">
-                {item.status === "in_progress" && item.checkpointKey && (
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => resumeLocalItem(item)}
-                    type="button"
-                  >
-                    Tiếp tục
-                  </button>
-                )}
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => void downloadLocalItem(item)}
-                  type="button"
-                >
-                  Tải về
-                </button>
-                <button
-                  className="btn btn-danger btn-sm"
-                  onClick={() => deleteLocalItem(item)}
-                  type="button"
-                >
-                  Xóa
-                </button>
-              </div>
-            </div>
-          );
-        })
-      ) : (
-        <div className="history-empty">
-          Chưa có lịch sử local.
-          <br />
-          <small>Dịch xong một file để tạo bản ghi.</small>
-        </div>
       )}
     </div>
   );

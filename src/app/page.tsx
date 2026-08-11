@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { AuthPanel } from "@/components/auth/AuthPanel";
 import { HistoryWorkspace } from "@/components/history/HistoryWorkspace";
@@ -12,16 +13,33 @@ import { useTranslationStore } from "@/store/translationStore";
 type AppMode = "translate" | "writing" | "history";
 
 const MODE_TABS: { mode: AppMode; label: string }[] = [
-  { mode: "translate", label: "Dịch mới" },
-  { mode: "writing", label: "Viết tiếp truyện" },
-  { mode: "history", label: "Lịch sử" },
+  { mode: "translate", label: "Bắt đầu dịch" },
+  { mode: "writing", label: "Viết tiếp mượt hơn" },
+  { mode: "history", label: "Lịch sử bản dịch" },
 ];
 
 export default function Home() {
   const [activeMode, setActiveMode] = useState<AppMode>("translate");
   const [authPanelOpen, setAuthPanelOpen] = useState(false);
-  const user = useAuthStore((s) => s.user);
-  const bootstrapAuth = useAuthStore((s) => s.bootstrap);
+  const [isHeaderScrolled, setIsHeaderScrolled] = useState(false);
+  const user = useAuthStore((authState) => authState.user);
+  const bootstrapAuth = useAuthStore((authState) => authState.bootstrap);
+
+  function handleToggleAuthPanel() {
+    setAuthPanelOpen((isPanelOpen) => !isPanelOpen);
+  }
+
+  function handleCloseAuthPanel() {
+    setAuthPanelOpen(false);
+  }
+
+  function handleSelectMode(mode: AppMode) {
+    setActiveMode(mode);
+  }
+
+  function handleResumeToTranslate() {
+    setActiveMode("translate");
+  }
 
   useEffect(() => {
     void bootstrapAuth();
@@ -30,36 +48,78 @@ export default function Home() {
     });
   }, [bootstrapAuth]);
 
-  const authButtonLabel = user?.email?.split("@")[0] || "Đăng nhập";
+  useEffect(() => {
+    function updateHeaderCompactState() {
+      const shouldCompactHeader = window.scrollY > 24;
+      setIsHeaderScrolled(shouldCompactHeader);
+    }
+
+    updateHeaderCompactState();
+    window.addEventListener("scroll", updateHeaderCompactState, {
+      passive: true,
+    });
+
+    return () => {
+      window.removeEventListener("scroll", updateHeaderCompactState);
+    };
+  }, []);
+
+  const authButtonLabel =
+    user?.displayName || user?.email?.split("@")[0] || "Đăng nhập";
 
   return (
     <div className="app-wrapper">
-      <div className="header">
+      <div className={`header ${isHeaderScrolled ? "is-scrolled" : ""}`.trim()}>
         <div className="header-top-row">
-          <div className="header-badge">Trình Dịch Truyện AI</div>
+          <div
+            className="header-badge"
+            aria-label="AI Story Translation Studio"
+          >
+            <span className="header-badge-kicker">AI Story</span>
+            <span className="header-badge-divider" aria-hidden="true" />
+            <span className="header-badge-label">Translation Studio</span>
+          </div>
           <button
             className="btn btn-secondary btn-sm header-auth-btn"
-            onClick={() => setAuthPanelOpen((value) => !value)}
+            onClick={handleToggleAuthPanel}
             type="button"
           >
             {authButtonLabel}
           </button>
         </div>
-        <h1>Dịch Truyện Chất Lượng Cao</h1>
-        <p className="header-subtitle">
-          Hỗ trợ file .txt lớn (15–20 MB), dịch sang tiếng Việt thuần bằng Grok,
-          ChatGPT API, Gemini hoặc OpenRouter
-        </p>
-        {authPanelOpen && <AuthPanel onClose={() => setAuthPanelOpen(false)} />}
+
+        <div className="header-main">
+          <div className="header-main-copy">
+            <h1 className="header-title">
+              Biến truyện gốc thành bản{" "}
+              <span className="headline-accent">Việt cuốn hút</span> ngay từ
+              chương đầu
+            </h1>
+            <p className="header-subtitle">
+              Upload file lớn, dịch nhanh và giữ đúng mạch cảm xúc nhân vật. Hỗ
+              trợ Grok, ChatGPT API, Gemini, OpenRouter để bạn chọn chất giọng
+              phù hợp từng thể loại.
+            </p>
+          </div>
+          <Image
+            src="/undraw-img/undraw-hero-ai-providers.svg"
+            alt="AI provider illustration"
+            className="illustration header-hero-illustration"
+            width={180}
+            height={110}
+            priority={false}
+          />
+        </div>
       </div>
 
-      <div className="card" style={{ padding: 12 }}>
-        <div className="tabs">
+      <div className="card mode-tabs-card">
+        <div className="tabs mode-tabs">
           {MODE_TABS.map(({ mode, label }) => (
             <button
               key={mode}
               className={`tab ${activeMode === mode ? "active" : ""}`}
-              onClick={() => setActiveMode(mode)}
+              onClick={() => handleSelectMode(mode)}
+              type="button"
             >
               {label}
             </button>
@@ -70,8 +130,10 @@ export default function Home() {
       {activeMode === "translate" && <TranslateWorkspace />}
       {activeMode === "writing" && <WritingWorkspace />}
       {activeMode === "history" && (
-        <HistoryWorkspace onResume={() => setActiveMode("translate")} />
+        <HistoryWorkspace onResume={handleResumeToTranslate} />
       )}
+
+      {authPanelOpen && <AuthPanel onClose={handleCloseAuthPanel} />}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { exportAs, ExportFormat } from "@/lib/export";
 import {
@@ -69,16 +70,23 @@ export function WritingWorkspace() {
   const [error, setError] = useState("");
   const [chunks, setChunks] = useState<string[]>([]);
   const [usage, setUsage] = useState<WritingUsage>(() => emptyUsage());
-  const [processingChunkIndex, setProcessingChunkIndex] = useState<number | null>(null);
+  const [processingChunkIndex, setProcessingChunkIndex] = useState<
+    number | null
+  >(null);
 
   const model = getSelectedModel();
   const resultText = chunks.join("\n\n");
   const hasFile = Boolean(fileContent);
   const canStart =
-    hasFile && Boolean(model) && Boolean(baseUrl.trim()) && (provider === "ollama" || Boolean(apiKey.trim()));
+    hasFile &&
+    Boolean(model) &&
+    Boolean(baseUrl.trim()) &&
+    (provider === "ollama" || Boolean(apiKey.trim()));
 
   const baseOutputName = useMemo(() => {
-    const sourceName = fileName ? fileName.replace(/\.[^.]+$/, "") : "continued_story";
+    const sourceName = fileName
+      ? fileName.replace(/\.[^.]+$/, "")
+      : "continued_story";
     return `${sourceName}_continued`;
   }, [fileName]);
 
@@ -137,7 +145,10 @@ export function WritingWorkspace() {
       temperature,
     };
     const budgets = getWritingContextBudgets(model);
-    const { styleSample, lastChapter } = extractWritingContext(fileContent, budgets);
+    const { styleSample, lastChapter } = extractWritingContext(
+      fileContent,
+      budgets,
+    );
 
     try {
       let storyAnalysis: string | null = null;
@@ -180,21 +191,35 @@ export function WritingWorkspace() {
           budgets.previousTailLength,
           nextChunks.length,
         );
-        const result = await continueWritingChunk(writingSystemPrompt, userPrompt, ctx);
+        const result = await continueWritingChunk(
+          writingSystemPrompt,
+          userPrompt,
+          ctx,
+        );
         nextChunks.push(result.text);
         accumulatedText = nextChunks.join("\n\n");
         nextUsage = addUsage(nextUsage, result.usage);
         setChunks(nextChunks.slice());
         setUsage(nextUsage);
 
-        if (delayBetweenChunks > 0 && index < chunkCount - 1 && !stopRequestedRef.current) {
-          await new Promise((resolve) => window.setTimeout(resolve, delayBetweenChunks));
+        if (
+          delayBetweenChunks > 0 &&
+          index < chunkCount - 1 &&
+          !stopRequestedRef.current
+        ) {
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, delayBetweenChunks),
+          );
         }
       }
 
       setStatus(stopRequestedRef.current ? "Đã dừng." : "Viết xong.");
     } catch (writingError) {
-      setError(writingError instanceof Error ? writingError.message : String(writingError));
+      setError(
+        writingError instanceof Error
+          ? writingError.message
+          : String(writingError),
+      );
       setStatus("Có lỗi khi viết tiếp.");
     } finally {
       setIsRunning(false);
@@ -221,14 +246,24 @@ export function WritingWorkspace() {
     };
   }
 
-  function replaceChunk(index: number, nextText: string, nextUsage: WritingUsage) {
+  function replaceChunk(
+    index: number,
+    nextText: string,
+    nextUsage: WritingUsage,
+  ) {
     setChunks((currentChunks) =>
-      currentChunks.map((chunk, chunkIndex) => (chunkIndex === index ? nextText : chunk)),
+      currentChunks.map((chunk, chunkIndex) =>
+        chunkIndex === index ? nextText : chunk,
+      ),
     );
     setUsage((currentUsage) => addUsage(currentUsage, nextUsage));
   }
 
-  async function transformChunk(index: number, systemInstruction: string, userInstruction: string) {
+  async function transformChunk(
+    index: number,
+    systemInstruction: string,
+    userInstruction: string,
+  ) {
     const originalText = chunks[index];
     if (!originalText) return;
     setProcessingChunkIndex(index);
@@ -243,7 +278,11 @@ export function WritingWorkspace() {
       replaceChunk(index, result.text, result.usage);
       setStatus(`Đã chỉnh đoạn ${index + 1}.`);
     } catch (transformError) {
-      setError(transformError instanceof Error ? transformError.message : String(transformError));
+      setError(
+        transformError instanceof Error
+          ? transformError.message
+          : String(transformError),
+      );
       setStatus("Có lỗi khi chỉnh đoạn.");
     } finally {
       setProcessingChunkIndex(null);
@@ -279,7 +318,10 @@ ${styleSample}
     setStatus(`Đang viết lại đoạn ${index + 1}...`);
     try {
       const budgets = getWritingContextBudgets(model);
-      const { styleSample, lastChapter } = extractWritingContext(fileContent, budgets);
+      const { styleSample, lastChapter } = extractWritingContext(
+        fileContent,
+        budgets,
+      );
       const previousText = chunks.slice(0, index).join("\n\n");
       const userPrompt = buildContinueWritingUserPrompt(
         lastChapter,
@@ -296,7 +338,11 @@ ${styleSample}
       replaceChunk(index, result.text, result.usage);
       setStatus(`Đã viết lại đoạn ${index + 1}.`);
     } catch (rewriteError) {
-      setError(rewriteError instanceof Error ? rewriteError.message : String(rewriteError));
+      setError(
+        rewriteError instanceof Error
+          ? rewriteError.message
+          : String(rewriteError),
+      );
       setStatus("Có lỗi khi viết lại đoạn.");
     } finally {
       setProcessingChunkIndex(null);
@@ -330,6 +376,14 @@ ${styleSample}
         <div className="card-title">
           <span className="icon">✍</span> Viết tiếp truyện
         </div>
+        <Image
+          src="/undraw-img/undraw-writing-hero.svg"
+          alt="Writing workspace illustration"
+          className="illustration writing-hero-illustration"
+          width={160}
+          height={110}
+          priority={false}
+        />
         {!hasFile && (
           <div className="alert alert-warning visible">
             Hãy tải file truyện ở tab Dịch mới trước khi viết tiếp.
@@ -345,7 +399,9 @@ ${styleSample}
               max={20}
               min={1}
               onChange={(event) =>
-                setChunkCount(Math.max(1, Number.parseInt(event.target.value, 10) || 1))
+                setChunkCount(
+                  Math.max(1, Number.parseInt(event.target.value, 10) || 1),
+                )
               }
               type="number"
               value={chunkCount}
@@ -353,13 +409,16 @@ ${styleSample}
           </div>
           <div className="form-group">
             <label htmlFor="writingTemperature">
-              Temperature: <span className="slider-value">{temperature.toFixed(2)}</span>
+              Temperature:{" "}
+              <span className="slider-value">{temperature.toFixed(2)}</span>
             </label>
             <input
               id="writingTemperature"
               max={1.2}
               min={0}
-              onChange={(event) => setTemperature(Number.parseFloat(event.target.value))}
+              onChange={(event) =>
+                setTemperature(Number.parseFloat(event.target.value))
+              }
               step={0.05}
               type="range"
               value={temperature}
@@ -368,7 +427,7 @@ ${styleSample}
         </div>
 
         <div className="form-group">
-          <label>Phong cách</label>
+          <p className="writing-field-title">Phong cách</p>
           <div className="format-row">
             {WRITING_STYLES.map((style) => (
               <button
@@ -434,7 +493,9 @@ ${styleSample}
             <div className="card-title" style={{ marginBottom: 0 }}>
               <span className="icon">▣</span> Kết quả viết tiếp
             </div>
-            {status && <span className="writing-chunk-indicator">{status}</span>}
+            {status && (
+              <span className="writing-chunk-indicator">{status}</span>
+            )}
           </div>
 
           <div className="progress-stats">
@@ -443,15 +504,21 @@ ${styleSample}
               <div className="stat-label">Đoạn</div>
             </div>
             <div className="progress-stat-card">
-              <div className="stat-value">{formatNumber(usage.promptTokens)}</div>
+              <div className="stat-value">
+                {formatNumber(usage.promptTokens)}
+              </div>
               <div className="stat-label">Prompt</div>
             </div>
             <div className="progress-stat-card">
-              <div className="stat-value">{formatNumber(usage.completionTokens)}</div>
+              <div className="stat-value">
+                {formatNumber(usage.completionTokens)}
+              </div>
               <div className="stat-label">Completion</div>
             </div>
             <div className="progress-stat-card">
-              <div className="stat-value">{formatCurrency(usage.totalCost)}</div>
+              <div className="stat-value">
+                {formatCurrency(usage.totalCost)}
+              </div>
               <div className="stat-label">Chi phí</div>
             </div>
           </div>
@@ -459,7 +526,10 @@ ${styleSample}
           <div className="writing-output">
             {chunks.length ? (
               chunks.map((chunk, index) => (
-                <div className="writing-chunk-block" key={`${index}-${chunk.slice(0, 16)}`}>
+                <div
+                  className="writing-chunk-block"
+                  key={`${index}-${chunk.slice(0, 16)}`}
+                >
                   <div className="chunk-header">
                     <span>Đoạn {index + 1}</span>
                     <div className="chunk-actions">
@@ -548,7 +618,11 @@ ${styleSample}
 
           {chunks.length > 0 && (
             <div className="format-row format-row-lg" style={{ marginTop: 12 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => void copyResult()} type="button">
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => void copyResult()}
+                type="button"
+              >
                 Sao chép
               </button>
               {EXPORT_OPTIONS.map(({ format, label }) => (

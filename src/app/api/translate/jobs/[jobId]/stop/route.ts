@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { authorizeJobAccess, isNextResponse } from "@/lib/translateJobsApi";
-import { updateTranslationJob } from "@/lib/translationJobs";
+import { appendJobLog, updateTranslationJob } from "@/lib/translationJobs";
 
 /**
- * Only flips the job to "stopping" — it doesn't stop synchronously. The next tick
- * (already in flight or the next self-chain hop) sees the status change, stops
- * launching new chunks, lets any in-flight ones finish, and flips to "stopped".
+ * Hard-stop request: mark the job as "stopped" immediately so the UI can reflect
+ * the state right away. In-flight chunks may still be finishing their current API
+ * calls, but the worker ignores their writes once status is no longer "running".
  */
 export async function POST(
   request: Request,
@@ -15,8 +15,11 @@ export async function POST(
   const job = await authorizeJobAccess(request, jobId);
   if (isNextResponse(job)) return job;
 
-  if (job.status === "running") {
-    await updateTranslationJob(jobId, { status: "stopping" });
+  if (job.status === "running" || job.status === "stopping") {
+    await updateTranslationJob(jobId, { status: "stopped" });
+    await appendJobLog(jobId, "Đã dừng bởi người dùng.", "warning").catch(
+      () => {},
+    );
   }
   return NextResponse.json({ ok: true });
 }

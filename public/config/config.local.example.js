@@ -1,6 +1,6 @@
 window.TRANSLATOR_LOCAL_CONFIG = {
   defaultProvider: "openrouter",
-  defaultModel: "mistralai/mistral-nemo",
+  defaultModel: "x-ai/grok-4.3",
   keys: {
     openrouter: "",
     openai: "",

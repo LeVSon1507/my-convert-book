@@ -3,6 +3,7 @@ import { requestChatCompletions } from "@/lib/chatApi";
 import { getCachedTranslation, setCacheTranslation } from "@/lib/cache";
 import { buildTranslationPrompt, type SkillId } from "@/lib/skills";
 import { buildGlossaryInstruction, parseGlossaryInput } from "@/lib/glossary";
+import { extractAutoGlossary } from "@/lib/hanvietDict";
 import {
   ChapterMapEntry,
   splitIntoChapterChunks,
@@ -10,11 +11,16 @@ import {
 } from "@/lib/chunking";
 import {
   applyTranslationScope,
-  estimateCost,
+  costFromTokens,
   estimateTokenCount,
+  estimateTokenCountForText,
 } from "@/lib/cost";
 import { exportAs, ExportFormat } from "@/lib/export";
-import { getCurrentIdToken, saveTranslation, saveTranslationProgress } from "@/lib/firebase";
+import {
+  getCurrentIdToken,
+  saveTranslation,
+  saveTranslationProgress,
+} from "@/lib/firebase";
 import {
   PROVIDER_CONFIGS,
   OPENROUTER_MODEL_GROUPS,
@@ -23,7 +29,10 @@ import {
   hashContent,
   shouldSkipTranslation,
 } from "@/lib/providers";
-import { buildFinalTextFromChunks, buildTranslationUserPrompt } from "@/lib/quality";
+import {
+  buildFinalTextFromChunks,
+  buildTranslationUserPrompt,
+} from "@/lib/quality";
 import {
   sleep,
   translateChunkWithRetry,
@@ -34,6 +43,7 @@ import type { RuntimeConfig } from "@/lib/runtimeConfig";
 import { useAuthStore } from "@/store/authStore";
 
 export type SpeedPresetId = "turbo" | "balanced" | "safe" | "economy";
+export type TranslationExecutionMode = "background" | "direct";
 
 export const SPEED_PRESETS: Record<
   SpeedPresetId,
@@ -49,8 +59,8 @@ const FAILED_MARKER = "[LỖI DỊCH ĐOẠN";
 const TRANSLATION_HISTORY_KEY = "translation_history_v1";
 const TRANSLATION_CHECKPOINT_PREFIX = "translation_checkpoint_v1:";
 const COMPLETED_TRANSLATION_PREFIX = "translation_completed_v1:";
-const AUTO_GLOSSARY_SAMPLE_INPUT_CHARS = (350 + 3000) * 3;
-const AUTO_GLOSSARY_SAMPLE_OUTPUT_CHARS = 600 * 3 * 3;
+const EXECUTION_MODE_STORAGE_KEY = "translation_execution_mode_v1";
+const ACTIVE_BACKEND_JOB_STORAGE_KEY = "translation_active_backend_job_v1";
 
 export type LogEntry = { timestamp: string; message: string; type: string };
 
@@ -89,14 +99,58 @@ export type TranslationCostPreview = {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCost: number;
-  glossaryPrePassInputTokens: number;
-  glossaryPrePassOutputTokens: number;
-  glossaryPrePassCost: number;
-  grandTotalCost: number;
 };
 
 function isTranslatedChunk(value: string | null): value is string {
   return Boolean(value);
+}
+
+function isTranslationExecutionMode(
+  value: unknown,
+): value is TranslationExecutionMode {
+  return value === "background" || value === "direct";
+}
+
+function readPersistedExecutionMode(): TranslationExecutionMode | null {
+  if (globalThis.window === undefined) return null;
+  try {
+    const raw = localStorage.getItem(EXECUTION_MODE_STORAGE_KEY);
+    return isTranslationExecutionMode(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistExecutionMode(mode: TranslationExecutionMode): void {
+  if (globalThis.window === undefined) return;
+  try {
+    localStorage.setItem(EXECUTION_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Persistence is best-effort in restricted/private browser contexts.
+  }
+}
+
+function readPersistedActiveBackendJobId(): string | null {
+  if (globalThis.window === undefined) return null;
+  try {
+    const rawValue = localStorage.getItem(ACTIVE_BACKEND_JOB_STORAGE_KEY);
+    return rawValue?.trim() ? rawValue : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveBackendJobId(jobId: string | null): void {
+  if (globalThis.window === undefined) return;
+  try {
+    if (!jobId) {
+      localStorage.removeItem(ACTIVE_BACKEND_JOB_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(ACTIVE_BACKEND_JOB_STORAGE_KEY, jobId);
+  } catch {
+    // Persistence is best-effort in restricted/private browser contexts.
+  }
 }
 
 function isProviderId(value: unknown): value is ProviderId {
@@ -134,6 +188,16 @@ function modelPatchForProvider(
   return isKnownModel
     ? { modelSelectValue: model, customModelName: "" }
     : { modelSelectValue: "__custom__", customModelName: model };
+}
+
+function findOpenRouterGroupForModel(modelId: string): string | null {
+  if (!modelId || modelId === "__custom__") return null;
+
+  const matchingGroupEntry = Object.entries(OPENROUTER_MODEL_GROUPS).find(
+    ([, group]) =>
+      group.models.some((modelOption) => modelOption.id === modelId),
+  );
+  return matchingGroupEntry ? matchingGroupEntry[0] : null;
 }
 
 function getTranslationHistoryId(
@@ -340,6 +404,7 @@ type TranslationState = {
   enableAutoGlossary: boolean;
   glossaryInput: string;
   selectedSkill: SkillId | null;
+  executionMode: TranslationExecutionMode;
   systemPrompt: string;
   activeSpeedPreset: SpeedPresetId | null;
 
@@ -423,6 +488,32 @@ type PreparedTranslationRun = {
   initialResults: (string | null)[];
 };
 
+function isValidBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsedUrl = new URL(baseUrl);
+    return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isKnownModelSelection(state: TranslationState): boolean {
+  const modelSelectValue = state.modelSelectValue;
+  if (!modelSelectValue || modelSelectValue === "__custom__") return true;
+
+  if (state.provider === "openrouter") {
+    const openRouterModels =
+      OPENROUTER_MODEL_GROUPS[state.openrouterGroup]?.models ?? [];
+    return openRouterModels.some(
+      (modelOption) => modelOption.id === modelSelectValue,
+    );
+  }
+
+  return PROVIDER_CONFIGS[state.provider].models.some(
+    (modelOption) => modelOption.id === modelSelectValue,
+  );
+}
+
 function getStartTranslationConfig(
   state: TranslationState,
 ): StartTranslationConfig | { error: string } {
@@ -432,10 +523,37 @@ function getStartTranslationConfig(
   const apiKey = state.apiKey.trim();
 
   if (provider !== "ollama" && !apiKey) {
-    return { error: "Vui lòng nhập API key." };
+    return {
+      error:
+        "Thiếu cấu hình API key. Vui lòng nhập API key trước khi bắt đầu dịch.",
+    };
   }
-  if (!modelName) return { error: "Vui lòng chọn hoặc nhập tên model." };
-  if (!baseUrl) return { error: "Vui lòng nhập Base URL." };
+  if (!modelName) {
+    return {
+      error: "Thiếu cấu hình model. Vui lòng chọn hoặc nhập tên model.",
+    };
+  }
+  if (
+    state.modelSelectValue === "__custom__" &&
+    !state.customModelName.trim()
+  ) {
+    return {
+      error: "Model tùy chỉnh đang trống. Vui lòng nhập Model ID hợp lệ.",
+    };
+  }
+  if (!isKnownModelSelection(state)) {
+    return {
+      error:
+        "Cấu hình model không hợp lệ cho provider hiện tại. Vui lòng chọn lại model.",
+    };
+  }
+  if (!baseUrl) return { error: "Thiếu cấu hình Base URL." };
+  if (!isValidBaseUrl(baseUrl)) {
+    return {
+      error:
+        "Base URL không hợp lệ. Vui lòng dùng URL đầy đủ bắt đầu bằng http:// hoặc https://.",
+    };
+  }
   if (!state.fileContent) return { error: "Vui lòng chọn file cần dịch." };
 
   return { provider, modelName, baseUrl, apiKey };
@@ -505,7 +623,10 @@ function splitSourceForTranslation(
     };
   }
 
-  const splitResult = splitIntoChapterChunks(state.fileContent, state.chunkSize);
+  const splitResult = splitIntoChapterChunks(
+    state.fileContent,
+    state.chunkSize,
+  );
   const chapterCount = splitResult.chapterMap.length
     ? Math.max(...splitResult.chapterMap.map((entry) => entry.chapterIndex))
     : 0;
@@ -524,16 +645,50 @@ function splitSourceForTranslation(
   };
 }
 
+/**
+ * Appends dictionary-derived glossary lines (recurring Han-Viet terms found in the
+ * source text) onto the user's manual glossary input — a free local stand-in for an
+ * AI glossary pre-pass. No-op unless enableAutoGlossary is on. User-supplied mappings
+ * always win over auto-detected ones for the same source term.
+ */
+async function buildEffectiveGlossaryInput(
+  state: TranslationState,
+): Promise<{ glossaryInput: string; autoCount: number }> {
+  if (!state.enableAutoGlossary || !state.fileContent) {
+    return { glossaryInput: state.glossaryInput, autoCount: 0 };
+  }
+
+  const userPairs = parseGlossaryInput(state.glossaryInput);
+  const userSources = new Set(userPairs.map((pair) => pair.source));
+  const autoPairs = (await extractAutoGlossary(state.fileContent)).filter(
+    (pair) => !userSources.has(pair.source),
+  );
+  if (!autoPairs.length) {
+    return { glossaryInput: state.glossaryInput, autoCount: 0 };
+  }
+
+  const autoLines = autoPairs
+    .map((pair) => `${pair.source} => ${pair.target}`)
+    .join("\n");
+  const glossaryInput = state.glossaryInput
+    ? `${state.glossaryInput}\n${autoLines}`
+    : autoLines;
+  return { glossaryInput, autoCount: autoPairs.length };
+}
+
 function prepareTranslationRun(
   state: TranslationState,
   resumeTranslatedChunks: (string | null)[],
+  effectiveGlossaryInput: string,
   get: TranslationGetter,
   set: TranslationSetter,
 ): PreparedTranslationRun {
   const { fullChunks, chapterMap } = splitSourceForTranslation(state, get, set);
   const chunks = applyTranslationScope(fullChunks, state.scopePercent);
   const initialResults =
-    resumeTranslatedChunks.length === chunks.length ? resumeTranslatedChunks : [];
+    resumeTranslatedChunks.length === chunks.length
+      ? resumeTranslatedChunks
+      : [];
 
   set({
     totalChunks: chunks.length,
@@ -547,7 +702,7 @@ function prepareTranslationRun(
     chapterMap,
     initialResults,
     glossaryInstruction: buildGlossaryInstruction(
-      parseGlossaryInput(state.glossaryInput),
+      parseGlossaryInput(effectiveGlossaryInput),
     ),
   };
 }
@@ -575,7 +730,12 @@ function logPreparedTranslationRun(
     `Bắt đầu dịch ${state.scopePercent}%: ${preparedRun.chunks.length} đoạn · ${state.concurrentRequests} luồng song song`,
     "accent",
   );
-  addLogEntry(get, set, `Model: ${config.modelName} @ ${config.baseUrl}`, "info");
+  addLogEntry(
+    get,
+    set,
+    `Model: ${config.modelName} @ ${config.baseUrl}`,
+    "info",
+  );
 }
 
 function logCompletionStatus(
@@ -649,7 +809,13 @@ async function completeTranslationRun(
   const completedState = get();
   saveCompletedTranslationLocal(completedState, config.modelName, finalText);
   addLogEntry(get, set, "Đã lưu bản dịch vào lịch sử local.", "success");
-  await saveCloudTranslationIfSignedIn(completedState, config, finalText, get, set);
+  await saveCloudTranslationIfSignedIn(
+    completedState,
+    config,
+    finalText,
+    get,
+    set,
+  );
 }
 
 async function executeTranslationRun(
@@ -697,6 +863,72 @@ const STALE_JOB_MS = 90_000;
 
 let backendPollTimer: ReturnType<typeof setInterval> | null = null;
 
+function getShortJobId(jobId: string): string {
+  return jobId.slice(0, 8).toUpperCase();
+}
+
+function normalizeBackendLogTimestamp(timestampValue: string): string {
+  const parsedTimestamp = Date.parse(timestampValue);
+  if (Number.isNaN(parsedTimestamp)) return timestampValue;
+  return new Date(parsedTimestamp).toLocaleTimeString("vi-VN");
+}
+
+function normalizeBackendLogs(jobLogs: LogEntry[]): LogEntry[] {
+  return jobLogs.map((logEntry) => ({
+    ...logEntry,
+    timestamp: normalizeBackendLogTimestamp(logEntry.timestamp),
+  }));
+}
+
+function buildBackendPollingStatusLog(
+  jobId: string,
+  job: BackendJobStatusResponse["job"],
+  progress: BackendJobStatusResponse["progress"],
+): LogEntry {
+  const progressDoneCount = progress.done + progress.permanentlyFailed;
+  const jobLabel = `Job ${getShortJobId(jobId)}`;
+
+  if (job.status === "stopping") {
+    return {
+      timestamp: new Date().toLocaleTimeString("vi-VN"),
+      message: `🛑 ${jobLabel} đang chờ dừng an toàn trên server...`,
+      type: "warning",
+    };
+  }
+
+  if (progressDoneCount === 0) {
+    return {
+      timestamp: new Date().toLocaleTimeString("vi-VN"),
+      message: `⏳ Polling ${jobLabel}: đã tạo job, đang chờ server nhận lượt dịch đầu tiên...`,
+      type: "info",
+    };
+  }
+
+  return {
+    timestamp: new Date().toLocaleTimeString("vi-VN"),
+    message: `⏳ Polling ${jobLabel}: đã xong ${progressDoneCount}/${job.totalChunks} đoạn, đang tiếp tục lấy tiến độ mới...`,
+    type: "info",
+  };
+}
+
+function buildBackendLogsForUi(
+  jobId: string,
+  job: BackendJobStatusResponse["job"],
+  progress: BackendJobStatusResponse["progress"],
+): LogEntry[] {
+  const normalizedLogs = normalizeBackendLogs(job.logs).slice(-179);
+  if (job.status !== "running" && job.status !== "stopping") {
+    return normalizedLogs;
+  }
+
+  const statusLog = buildBackendPollingStatusLog(jobId, job, progress);
+  const latestServerLog = normalizedLogs.at(-1);
+  if (latestServerLog?.message === statusLog.message) {
+    return normalizedLogs;
+  }
+  return [...normalizedLogs, statusLog];
+}
+
 function stopBackendJobPolling(): void {
   if (backendPollTimer) {
     clearInterval(backendPollTimer);
@@ -733,8 +965,12 @@ async function fetchBackendJobText(
       headers: { Authorization: `Bearer ${idToken}` },
     });
     if (!response.ok) return null;
-    const data = (await response.json()) as { text?: string; chunks?: string[] };
-    if (typeof data.text !== "string" || !Array.isArray(data.chunks)) return null;
+    const data = (await response.json()) as {
+      text?: string;
+      chunks?: string[];
+    };
+    if (typeof data.text !== "string" || !Array.isArray(data.chunks))
+      return null;
     return { text: data.text, chunks: data.chunks };
   } catch {
     return null;
@@ -753,6 +989,7 @@ async function finalizeBackendJob(
   set: TranslationSetter,
 ): Promise<void> {
   const result = await fetchBackendJobText(jobId);
+  persistActiveBackendJobId(null);
   set({
     activeJobId: null,
     isRunning: false,
@@ -783,9 +1020,22 @@ async function pollBackendJobOnce(
   } catch {
     return; // transient network hiccup — the interval retries in 3s
   }
-  if (!response.ok) return;
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 404) {
+      stopBackendJobPolling();
+      persistActiveBackendJobId(null);
+      set({
+        isRunning: false,
+        activeJobId: null,
+        error:
+          "Không tìm thấy job nền đang chạy. Vui lòng kiểm tra lại trong Lịch sử bản dịch.",
+      });
+    }
+    return;
+  }
 
   const { job, progress } = (await response.json()) as BackendJobStatusResponse;
+  persistActiveBackendJobId(job.id);
   set({
     totalChunks: job.totalChunks,
     completedChunks: progress.done + progress.permanentlyFailed,
@@ -794,7 +1044,7 @@ async function pollBackendJobOnce(
       completionTokens: progress.completionTokens,
       totalCost: progress.cost,
     },
-    logs: job.logs,
+    logs: buildBackendLogsForUi(jobId, job, progress),
   });
 
   if (job.status === "completed" || job.status === "stopped") {
@@ -805,7 +1055,12 @@ async function pollBackendJobOnce(
 
   if (job.status === "error") {
     stopBackendJobPolling();
-    set({ isRunning: false, activeJobId: null, error: `Lỗi dịch: ${job.error}` });
+    persistActiveBackendJobId(null);
+    set({
+      isRunning: false,
+      activeJobId: null,
+      error: `Lỗi dịch: ${job.error}`,
+    });
     return;
   }
 
@@ -827,7 +1082,11 @@ function startBackendJobPolling(
   set: TranslationSetter,
 ): void {
   stopBackendJobPolling();
-  backendPollTimer = setInterval(() => void pollBackendJobOnce(jobId, get, set), POLL_INTERVAL_MS);
+  void pollBackendJobOnce(jobId, get, set);
+  backendPollTimer = setInterval(
+    () => void pollBackendJobOnce(jobId, get, set),
+    POLL_INTERVAL_MS,
+  );
 }
 
 async function attachToBackendJobId(
@@ -835,6 +1094,7 @@ async function attachToBackendJobId(
   get: TranslationGetter,
   set: TranslationSetter,
 ): Promise<void> {
+  persistActiveBackendJobId(jobId);
   set({
     activeJobId: jobId,
     isRunning: true,
@@ -846,24 +1106,31 @@ async function attachToBackendJobId(
   addLogEntry(
     get,
     set,
-    "🖥️ Đã kết nối lại job dịch nền đang chạy — vẫn dịch tiếp khi bạn đóng tab trước đó.",
+    `🖥️ Đã kết nối lại Job ${getShortJobId(jobId)} — vẫn dịch tiếp khi bạn đóng tab trước đó.`,
     "accent",
   );
   startBackendJobPolling(jobId, get, set);
 }
 
-async function stopBackendJob(jobId: string): Promise<void> {
+async function stopBackendJob(jobId: string): Promise<boolean> {
   const idToken = await getCurrentIdToken();
-  if (!idToken) return;
-  await fetch(`/api/translate/jobs/${jobId}/stop`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${idToken}` },
-  }).catch(() => {});
+  if (!idToken) return false;
+  try {
+    const response = await fetch(`/api/translate/jobs/${jobId}/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function startBackendTranslation(
   state: TranslationState,
   config: StartTranslationConfig,
+  effectiveGlossaryInput: string,
+  autoGlossaryCount: number,
   get: TranslationGetter,
   set: TranslationSetter,
 ): Promise<void> {
@@ -880,7 +1147,21 @@ async function startBackendTranslation(
     resultVisible: false,
     activeJobId: null,
   });
+  if (autoGlossaryCount > 0) {
+    addLogEntry(
+      get,
+      set,
+      `📚 Tự động thêm ${autoGlossaryCount} thuật ngữ Hán-Việt vào glossary.`,
+      "accent",
+    );
+  }
   addLogEntry(get, set, "Đang tạo job dịch nền...", "accent");
+  addLogEntry(
+    get,
+    set,
+    `Cấu hình job nền: provider=${state.provider}, model=${config.modelName}`,
+    "info",
+  );
 
   try {
     const idToken = await getCurrentIdToken();
@@ -888,7 +1169,10 @@ async function startBackendTranslation(
 
     const response = await fetch("/api/translate/jobs", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
       body: JSON.stringify({
         fileName: state.fileName,
         fileContent: state.fileContent,
@@ -904,7 +1188,7 @@ async function startBackendTranslation(
         scopePercent: state.scopePercent,
         enableChapterSplit: state.enableChapterSplit,
         systemPrompt: state.systemPrompt,
-        glossaryInput: state.glossaryInput,
+        glossaryInput: effectiveGlossaryInput,
       }),
     });
 
@@ -912,16 +1196,18 @@ async function startBackendTranslation(
     if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
 
     set({ activeJobId: data.jobId });
+    persistActiveBackendJobId(data.jobId);
     addLogEntry(
       get,
       set,
-      "🖥️ Đang dịch nền trên server — có thể đóng trình duyệt hoặc tắt màn hình.",
+      `🖥️ Đang dịch nền trên server (${getShortJobId(data.jobId)}) — có thể đóng trình duyệt hoặc tắt màn hình.`,
       "success",
     );
     startBackendJobPolling(data.jobId, get, set);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     addLogEntry(get, set, `Lỗi tạo job dịch nền: ${message}`, "error");
+    persistActiveBackendJobId(null);
     set({ error: `Lỗi dịch: ${message}`, isRunning: false });
   }
 }
@@ -949,6 +1235,7 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   enableAutoGlossary: false,
   glossaryInput: "",
   selectedSkill: null,
+  executionMode: readPersistedExecutionMode() ?? "background",
   systemPrompt: buildTranslationPrompt(null, null),
   activeSpeedPreset: "turbo",
 
@@ -974,7 +1261,8 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
     const config = PROVIDER_CONFIGS[provider];
     const modelSelectValue =
       provider === "openrouter"
-        ? (OPENROUTER_MODEL_GROUPS[get().openrouterGroup]?.defaultModel ?? config.defaultModel)
+        ? (OPENROUTER_MODEL_GROUPS[get().openrouterGroup]?.defaultModel ??
+          config.defaultModel)
         : config.defaultModel;
     set({
       provider,
@@ -985,7 +1273,21 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   },
 
   setModelSelectValue(value) {
-    set({ modelSelectValue: value });
+    if (get().provider !== "openrouter") {
+      set({ modelSelectValue: value });
+      return;
+    }
+
+    const patch: Partial<TranslationState> = {
+      modelSelectValue: value,
+      customModelName: value === "__custom__" ? get().customModelName : "",
+    };
+    const openRouterGroup = findOpenRouterGroupForModel(value);
+    if (openRouterGroup) {
+      patch.openrouterGroup = openRouterGroup;
+    }
+
+    set(patch);
   },
 
   setCustomModelName(value) {
@@ -1010,6 +1312,9 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   },
 
   updateSettings(partial) {
+    if (isTranslationExecutionMode(partial.executionMode)) {
+      persistExecutionMode(partial.executionMode);
+    }
     set(partial);
   },
 
@@ -1030,14 +1335,20 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
         patch,
         modelPatchForProvider(nextProvider, config.defaultModel),
       );
+
+      if (nextProvider === "openrouter") {
+        const openRouterGroup = findOpenRouterGroupForModel(
+          config.defaultModel.trim(),
+        );
+        if (openRouterGroup) {
+          patch.openrouterGroup = openRouterGroup;
+        }
+      }
     } else if (isProviderId(config.defaultProvider)) {
       patch.modelSelectValue =
         PROVIDER_CONFIGS[config.defaultProvider].defaultModel;
       patch.customModelName = "";
     }
-
-    const runtimeKey = runtimeApiKeys[nextProvider];
-    if (nextProvider !== "ollama" && runtimeKey) patch.apiKey = runtimeKey;
 
     set(patch);
   },
@@ -1098,68 +1409,112 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
     const promptOverheadChars =
       (state.systemPrompt + glossaryInstruction).length +
       buildTranslationUserPrompt("[CHUNK]", false, true).length;
+    const promptOverheadTokens = estimateTokenCount(promptOverheadChars);
     const retryBufferFactor = 1.08;
-    const outputExpansionFactor = 1.1;
+    // Vietnamese output runs notably longer than the Chinese source in raw
+    // character count — Han characters are logographic and pack more meaning
+    // per glyph than Vietnamese's Latin-alphabet-plus-diacritics prose.
+    const outputExpansionFactor = 2.2;
 
-    let estimatedInputChars = 0;
-    let estimatedOutputChars = 0;
+    let estimatedInputTokens = 0;
+    let estimatedOutputTokens = 0;
     chunks.forEach((chunk) => {
-      estimatedInputChars += chunk.length + promptOverheadChars;
-      estimatedOutputChars += Math.ceil(chunk.length * outputExpansionFactor);
+      estimatedInputTokens +=
+        estimateTokenCountForText(chunk) + promptOverheadTokens;
+      estimatedOutputTokens += estimateTokenCount(
+        Math.ceil(chunk.length * outputExpansionFactor),
+      );
     });
-    estimatedInputChars = Math.ceil(estimatedInputChars * retryBufferFactor);
-    estimatedOutputChars = Math.ceil(estimatedOutputChars * retryBufferFactor);
+    estimatedInputTokens = Math.ceil(estimatedInputTokens * retryBufferFactor);
+    estimatedOutputTokens = Math.ceil(
+      estimatedOutputTokens * retryBufferFactor,
+    );
 
     const totalCost =
-      estimateCost(estimatedInputChars, model, true) +
-      estimateCost(estimatedOutputChars, model, false);
-    const glossaryPrePassInputTokens = state.enableAutoGlossary
-      ? estimateTokenCount(AUTO_GLOSSARY_SAMPLE_INPUT_CHARS)
-      : 0;
-    const glossaryPrePassOutputTokens = state.enableAutoGlossary
-      ? estimateTokenCount(AUTO_GLOSSARY_SAMPLE_OUTPUT_CHARS)
-      : 0;
-    const glossaryPrePassCost = state.enableAutoGlossary
-      ? estimateCost(AUTO_GLOSSARY_SAMPLE_INPUT_CHARS, model, true) +
-        estimateCost(AUTO_GLOSSARY_SAMPLE_OUTPUT_CHARS, model, false)
-      : 0;
+      costFromTokens(estimatedInputTokens, model, true) +
+      costFromTokens(estimatedOutputTokens, model, false);
 
     return {
       totalChunks: chunks.length,
-      totalInputTokens: estimateTokenCount(estimatedInputChars),
-      totalOutputTokens: estimateTokenCount(estimatedOutputChars),
+      totalInputTokens: estimatedInputTokens,
+      totalOutputTokens: estimatedOutputTokens,
       totalCost,
-      glossaryPrePassInputTokens,
-      glossaryPrePassOutputTokens,
-      glossaryPrePassCost,
-      grandTotalCost: totalCost + glossaryPrePassCost,
     };
   },
 
   async startTranslation() {
     const state = get();
     const config = getStartTranslationConfig(state);
-    if ("error" in config) return set({ error: config.error });
-
-    // Signed-in users get a backend job (survives tab close / screen off);
-    // Ollama can't run there (Vercel has no network path to localhost), and
-    // anonymous users have nowhere to store a job, so both keep the legacy
-    // fully-client-side pipeline below.
-    if (useAuthStore.getState().user && state.provider !== "ollama") {
-      return startBackendTranslation(state, config, get, set);
+    if ("error" in config) {
+      addLogEntry(get, set, config.error, "error");
+      return set({ error: config.error, progressVisible: true });
     }
+
+    const { glossaryInput: effectiveGlossaryInput, autoCount } =
+      await buildEffectiveGlossaryInput(state);
 
     const resumeError = getResumeMismatchError(state);
     if (resumeError) return set({ error: resumeError });
-
     const resumeTranslatedChunks = getResumeTranslatedChunks(
       state.pendingResumeCheckpoint,
     );
+    const hasResumeCheckpoint = resumeTranslatedChunks.some(isTranslatedChunk);
+
+    // Signed-in users can choose backend mode (survives tab close / screen off)
+    // or direct mode (lower overhead, usually faster perceived throughput).
+    const shouldUseBackendJob =
+      Boolean(useAuthStore.getState().user) &&
+      state.provider !== "ollama" &&
+      state.executionMode === "background" &&
+      !hasResumeCheckpoint;
+    if (shouldUseBackendJob) {
+      return startBackendTranslation(
+        state,
+        config,
+        effectiveGlossaryInput,
+        autoCount,
+        get,
+        set,
+      );
+    }
+
+    if (
+      hasResumeCheckpoint &&
+      Boolean(useAuthStore.getState().user) &&
+      state.provider !== "ollama" &&
+      state.executionMode === "background"
+    ) {
+      addLogEntry(
+        get,
+        set,
+        "⚡ Đang tiếp tục từ checkpoint nên dùng chế độ trực tiếp để giữ nguyên tiến độ đã có.",
+        "accent",
+      );
+    }
+
+    if (useAuthStore.getState().user && state.provider !== "ollama") {
+      addLogEntry(
+        get,
+        set,
+        "⚡ Chế độ dịch trực tiếp: nhanh hơn nhưng cần giữ tab mở đến khi hoàn tất.",
+        "accent",
+      );
+    }
+
     resetTranslationRun(set, resumeTranslatedChunks);
+    if (autoCount > 0) {
+      addLogEntry(
+        get,
+        set,
+        `📚 Tự động thêm ${autoCount} thuật ngữ Hán-Việt vào glossary.`,
+        "accent",
+      );
+    }
 
     const preparedRun = prepareTranslationRun(
       state,
       resumeTranslatedChunks,
+      effectiveGlossaryInput,
       get,
       set,
     );
@@ -1180,8 +1535,21 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   async stopTranslation() {
     const activeJobId = get().activeJobId;
     if (activeJobId) {
-      addLogEntry(get, set, "Đang dừng job dịch nền...", "warning");
-      await stopBackendJob(activeJobId);
+      set({ isStopped: true });
+      addLogEntry(get, set, "Đang gửi lệnh dừng job dịch nền...", "warning");
+      const stopRequested = await stopBackendJob(activeJobId);
+      if (!stopRequested) {
+        addLogEntry(
+          get,
+          set,
+          "Không gửi được lệnh dừng. Vui lòng thử lại.",
+          "error",
+        );
+        set({ isStopped: false });
+        return;
+      }
+
+      await pollBackendJobOnce(activeJobId, get, set);
       return;
     }
 
@@ -1206,11 +1574,23 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
         headers: { Authorization: `Bearer ${idToken}` },
       });
       if (!response.ok) return;
-      const data = (await response.json()) as { jobs?: { id: string }[] };
-      const job = data.jobs?.[0];
-      if (!job) return;
+      const data = (await response.json()) as {
+        jobs?: { id: string; updatedAtMs?: number }[];
+      };
+      const runningJobs = Array.isArray(data.jobs) ? data.jobs.slice() : [];
+      runningJobs.sort(
+        (firstJob, secondJob) =>
+          (secondJob.updatedAtMs ?? 0) - (firstJob.updatedAtMs ?? 0),
+      );
+      const freshestRunningJob = runningJobs[0];
+      if (freshestRunningJob) {
+        await attachToBackendJobId(freshestRunningJob.id, get, set);
+        return;
+      }
 
-      await attachToBackendJobId(job.id, get, set);
+      const persistedJobId = readPersistedActiveBackendJobId();
+      if (!persistedJobId) return;
+      await attachToBackendJobId(persistedJobId, get, set);
     } catch {
       // Best-effort reconnect — the job keeps running server-side regardless.
     }
@@ -1513,7 +1893,12 @@ async function retryFailedChunkAtIndex(
     const next = options.get().translatedChunks.slice();
     next[index] = retranslated;
     options.set({ translatedChunks: next });
-    addLogEntry(options.get, options.set, `  ✓ Đoạn ${index + 1} đã sửa!`, "success");
+    addLogEntry(
+      options.get,
+      options.set,
+      `  ✓ Đoạn ${index + 1} đã sửa!`,
+      "success",
+    );
   } catch (retryError) {
     const message =
       retryError instanceof Error ? retryError.message : String(retryError);
