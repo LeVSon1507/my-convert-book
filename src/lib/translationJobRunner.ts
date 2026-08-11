@@ -12,6 +12,7 @@ import {
   writeChunkFailure,
   writeChunkSuccess,
   type TranslationJobDoc,
+  type WorkItem,
 } from "@/lib/translationJobs";
 import { callChatApiDirect } from "@/lib/chatApi";
 import { ensureOpenRouterPricingLoaded, shouldSkipTranslation } from "@/lib/providers";
@@ -104,11 +105,40 @@ async function processOneChunk(
 }
 
 /**
- * Wave-based concurrency (fetch up to N pending/retryable chunks, run them in
- * parallel, wait for the wave, repeat) rather than the client's stream-as-slots-
- * free scheduler — simpler to reason about against Firestore, and ticks already
- * chain rapidly so waiting on a wave's slowest chunk costs little in practice.
+ * Sliding-window concurrency — as soon as any slot frees up, immediately launch
+ * the next pending chunk, rather than waiting for a whole wave to finish. Ported
+ * from the pre-backend-job client scheduler (see processChunksWithConcurrency in
+ * git history, public/scripts/translate/09b-process-chunks.js) after the earlier
+ * wave-based version (fetch N, `Promise.all`, repeat) turned out to be a real
+ * throughput regression: with concurrentRequests=30, one slow chunk (a 429
+ * backoff can sleep up to ~30s) stalled the other 29 already-finished slots
+ * until the whole wave completed, instead of them picking up new work right away.
  */
+async function runQueuedChunk(
+  job: TranslationJobDoc & { id: string },
+  item: WorkItem,
+  params: EngineParams,
+): Promise<void> {
+  await processOneChunk(job, item, params);
+  if (job.delayBetweenChunks > 0) {
+    await new Promise((resolve) => setTimeout(resolve, job.delayBetweenChunks));
+  }
+}
+
+/** Pulls the next Firestore batch into `queue`. Returns false once the job
+ *  should stop (no longer running, or truly no work and nothing in flight). */
+async function refillWorkQueue(
+  jobId: string,
+  concurrency: number,
+  inFlightCount: number,
+): Promise<WorkItem[] | null> {
+  const latest = await getTranslationJob(jobId);
+  if (latest?.status !== "running") return null;
+
+  const batch = await getWorkBatch(jobId, concurrency);
+  return batch.length > 0 || inFlightCount > 0 ? batch : null;
+}
+
 async function processAvailableWork(
   job: TranslationJobDoc & { id: string },
   deadline: number,
@@ -123,19 +153,44 @@ async function processAvailableWork(
     glossaryInstruction: job.glossaryInstruction,
   };
 
-  while (Date.now() < deadline) {
-    const latest = await getTranslationJob(job.id);
-    if (!latest || latest.status !== "running") return;
+  const concurrency = Math.max(1, job.concurrentRequests);
+  let queue: WorkItem[] = [];
+  const inFlight = new Map<Promise<void>, true>();
 
-    const batch = await getWorkBatch(job.id, job.concurrentRequests);
-    if (batch.length === 0) return;
-
-    await Promise.all(batch.map((chunk) => processOneChunk(job, chunk, params)));
-
-    if (job.delayBetweenChunks > 0) {
-      await new Promise((resolve) => setTimeout(resolve, job.delayBetweenChunks));
-    }
+  function launch(item: WorkItem): void {
+    const runPromise = runQueuedChunk(job, item, params).finally(() =>
+      inFlight.delete(runPromise),
+    );
+    inFlight.set(runPromise, true);
   }
+
+  for (;;) {
+    while (queue.length > 0 && inFlight.size < concurrency) {
+      launch(queue.shift() as WorkItem);
+    }
+
+    const pastDeadline = Date.now() >= deadline;
+    const needsRefill = queue.length === 0 && inFlight.size < concurrency;
+    if (needsRefill && !pastDeadline) {
+      const nextBatch = await refillWorkQueue(job.id, concurrency, inFlight.size);
+      if (nextBatch === null) break;
+      // Got fresh work — loop back up to launch it. If it came back empty
+      // but chunks are still finishing (the job's tail end), fall through to
+      // wait on those instead of hammering Firestore again immediately with
+      // no chunk having actually completed in between.
+      if (nextBatch.length > 0) {
+        queue = nextBatch;
+        continue;
+      }
+    }
+
+    if (inFlight.size === 0 || pastDeadline) break;
+    await Promise.race(inFlight.keys());
+  }
+
+  // Let whatever's already in flight finish — same as the old wave-based
+  // version always finishing its current wave regardless of the deadline.
+  await Promise.allSettled(inFlight.keys());
 }
 
 async function finalizeJob(job: TranslationJobDoc & { id: string }): Promise<void> {
