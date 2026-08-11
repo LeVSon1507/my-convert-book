@@ -139,6 +139,45 @@ async function refillWorkQueue(
   return batch.length > 0 || inFlightCount > 0 ? batch : null;
 }
 
+type SchedulerState = {
+  queue: WorkItem[];
+  inFlight: Map<Promise<void>, true>;
+};
+
+/**
+ * Decides (and performs) the scheduler's next move: refill the queue from
+ * Firestore if there's capacity and time left, or wait for an in-flight
+ * chunk to finish freeing a slot. Returns false once the caller should stop
+ * looping. Split out from processAvailableWork purely to keep each
+ * function's cognitive complexity low — SonarQube scores nesting depth, and
+ * this branching nested one level deeper inside a `for(;;)` was enough to
+ * push the combined function over the limit.
+ */
+async function advanceScheduler(
+  jobId: string,
+  concurrency: number,
+  deadline: number,
+  state: SchedulerState,
+): Promise<boolean> {
+  const needsRefill = state.queue.length === 0 && state.inFlight.size < concurrency;
+  if (needsRefill && Date.now() < deadline) {
+    const nextBatch = await refillWorkQueue(jobId, concurrency, state.inFlight.size);
+    if (nextBatch === null) return false;
+    // Got fresh work — report back so the caller launches it. If it came
+    // back empty but chunks are still finishing (the job's tail end), fall
+    // through to wait on those instead of hammering Firestore again
+    // immediately with no chunk having actually completed in between.
+    if (nextBatch.length > 0) {
+      state.queue = nextBatch;
+      return true;
+    }
+  }
+
+  if (state.inFlight.size === 0 || Date.now() >= deadline) return false;
+  await Promise.race(state.inFlight.keys());
+  return true;
+}
+
 async function processAvailableWork(
   job: TranslationJobDoc & { id: string },
   deadline: number,
@@ -154,43 +193,27 @@ async function processAvailableWork(
   };
 
   const concurrency = Math.max(1, job.concurrentRequests);
-  let queue: WorkItem[] = [];
-  const inFlight = new Map<Promise<void>, true>();
+  const state: SchedulerState = { queue: [], inFlight: new Map() };
 
   function launch(item: WorkItem): void {
     const runPromise = runQueuedChunk(job, item, params).finally(() =>
-      inFlight.delete(runPromise),
+      state.inFlight.delete(runPromise),
     );
-    inFlight.set(runPromise, true);
+    state.inFlight.set(runPromise, true);
   }
 
   for (;;) {
-    while (queue.length > 0 && inFlight.size < concurrency) {
-      launch(queue.shift() as WorkItem);
+    while (state.queue.length > 0 && state.inFlight.size < concurrency) {
+      launch(state.queue.shift() as WorkItem);
     }
 
-    const pastDeadline = Date.now() >= deadline;
-    const needsRefill = queue.length === 0 && inFlight.size < concurrency;
-    if (needsRefill && !pastDeadline) {
-      const nextBatch = await refillWorkQueue(job.id, concurrency, inFlight.size);
-      if (nextBatch === null) break;
-      // Got fresh work — loop back up to launch it. If it came back empty
-      // but chunks are still finishing (the job's tail end), fall through to
-      // wait on those instead of hammering Firestore again immediately with
-      // no chunk having actually completed in between.
-      if (nextBatch.length > 0) {
-        queue = nextBatch;
-        continue;
-      }
-    }
-
-    if (inFlight.size === 0 || pastDeadline) break;
-    await Promise.race(inFlight.keys());
+    const shouldContinue = await advanceScheduler(job.id, concurrency, deadline, state);
+    if (!shouldContinue) break;
   }
 
   // Let whatever's already in flight finish — same as the old wave-based
   // version always finishing its current wave regardless of the deadline.
-  await Promise.allSettled(inFlight.keys());
+  await Promise.allSettled(state.inFlight.keys());
 }
 
 async function finalizeJob(job: TranslationJobDoc & { id: string }): Promise<void> {
