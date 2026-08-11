@@ -1697,6 +1697,12 @@ export function TranslateWorkspace() {
   const [isMobileExecutionPanelOpen, setIsMobileExecutionPanelOpen] =
     useState(false);
   const hasLoadedFile = Boolean(fileContent);
+  const workspaceClassName = hasLoadedFile
+    ? "translate-workspace"
+    : "translate-workspace is-empty-state";
+  const workspaceLayoutClassName = hasLoadedFile
+    ? "translate-workspace-layout"
+    : "translate-workspace-layout is-empty-state";
   const shouldRenderExecutionPanel =
     hasLoadedFile && (!isMobileViewport || isMobileExecutionPanelOpen);
 
@@ -1722,8 +1728,8 @@ export function TranslateWorkspace() {
   }, [user, resumeActiveBackendJob]);
 
   return (
-    <div className="translate-workspace">
-      <div className="translate-workspace-layout">
+    <div className={workspaceClassName}>
+      <div className={workspaceLayoutClassName}>
         <section className="translate-main-column">
           <FileUpload isPrimaryFocus={!hasLoadedFile} />
           {!hasLoadedFile && (
@@ -1761,7 +1767,7 @@ export function TranslateWorkspace() {
           )}
         </section>
 
-        {!isMobileViewport && (
+        {!isMobileViewport && hasLoadedFile && (
           <aside className="translate-inspector-column">
             <div className="translate-inspector-sticky">
               <ProviderAndModel />
@@ -1772,13 +1778,13 @@ export function TranslateWorkspace() {
         )}
       </div>
 
-      {isMobileViewport && (
+      {isMobileViewport && hasLoadedFile && (
         <MobileSettingsLauncher
           onOpenSettings={() => setIsInspectorSheetOpen(true)}
         />
       )}
 
-      {isMobileViewport && isInspectorSheetOpen && (
+      {isMobileViewport && hasLoadedFile && isInspectorSheetOpen && (
         <div className="mobile-inspector-sheet-root">
           <button
             className="mobile-inspector-sheet-backdrop"

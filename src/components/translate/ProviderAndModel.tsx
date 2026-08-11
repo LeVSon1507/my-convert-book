@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   OPENROUTER_MODEL_GROUPS,
   PROVIDER_CONFIGS,
@@ -292,6 +293,59 @@ export function ProviderAndModel() {
     setKeyHint("Đã áp dụng cấu hình khuyên dùng: OpenRouter + Grok 4.3.");
   }
 
+  function renderProviderGuideModal() {
+    if (!isApiGuideOpen || typeof document === "undefined") {
+      return null;
+    }
+
+    return createPortal(
+      <div className="provider-guide-modal-root">
+        <button
+          className="provider-guide-modal-dismiss"
+          onClick={closeApiGuide}
+          type="button"
+          aria-label="Đóng hướng dẫn API"
+        />
+        <dialog
+          open
+          className="provider-guide-modal-card"
+          aria-label={providerApiGuide.title}
+        >
+          <div className="provider-guide-modal-header">
+            <h3>{providerApiGuide.title}</h3>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={closeApiGuide}
+              type="button"
+            >
+              Đóng
+            </button>
+          </div>
+          <p className="provider-guide-modal-intro">{providerApiGuide.intro}</p>
+          <ol className="provider-guide-step-list">
+            {providerApiGuide.steps.map((stepText, stepIndex) => (
+              <li key={`${provider}-${stepIndex}-${stepText}`}>{stepText}</li>
+            ))}
+          </ol>
+          <a
+            className="provider-guide-doc-link"
+            href={providerApiGuide.docsUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {providerApiGuide.docsLabel}
+          </a>
+          {providerApiGuide.footnote && (
+            <p className="provider-guide-footnote">
+              {providerApiGuide.footnote}
+            </p>
+          )}
+        </dialog>
+      </div>,
+      document.body,
+    );
+  }
+
   return (
     <div className="card" id="apiCard">
       <div className="card-title">
@@ -451,53 +505,7 @@ export function ProviderAndModel() {
         />
       </div>
 
-      {isApiGuideOpen && (
-        <div className="provider-guide-modal-root">
-          <button
-            className="provider-guide-modal-dismiss"
-            onClick={closeApiGuide}
-            type="button"
-            aria-label="Đóng hướng dẫn API"
-          />
-          <dialog
-            open
-            className="provider-guide-modal-card"
-            aria-label={providerApiGuide.title}
-          >
-            <div className="provider-guide-modal-header">
-              <h3>{providerApiGuide.title}</h3>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={closeApiGuide}
-                type="button"
-              >
-                Đóng
-              </button>
-            </div>
-            <p className="provider-guide-modal-intro">
-              {providerApiGuide.intro}
-            </p>
-            <ol className="provider-guide-step-list">
-              {providerApiGuide.steps.map((stepText, stepIndex) => (
-                <li key={`${provider}-${stepIndex}-${stepText}`}>{stepText}</li>
-              ))}
-            </ol>
-            <a
-              className="provider-guide-doc-link"
-              href={providerApiGuide.docsUrl}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {providerApiGuide.docsLabel}
-            </a>
-            {providerApiGuide.footnote && (
-              <p className="provider-guide-footnote">
-                {providerApiGuide.footnote}
-              </p>
-            )}
-          </dialog>
-        </div>
-      )}
+      {renderProviderGuideModal()}
     </div>
   );
 }

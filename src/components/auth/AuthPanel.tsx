@@ -326,7 +326,7 @@ function AuthRegisterFields({
         label="Tên hiển thị"
         onFieldBlur={onFieldBlur}
         onFieldValueChange={onFieldValueChange}
-        placeholder="Ví dụ: Son Le"
+        placeholder="Ví dụ: Le Van A"
         type="text"
         validationError={fullNameError}
       />
@@ -339,7 +339,7 @@ function AuthRegisterFields({
         label="Username"
         onFieldBlur={onFieldBlur}
         onFieldValueChange={onFieldValueChange}
-        placeholder="Ví dụ: ten_cua_ban_123"
+        placeholder="Ví dụ: son_le_123"
         type="text"
         validationError={usernameError}
       />
@@ -349,7 +349,7 @@ function AuthRegisterFields({
         formValues={formValues}
         icon="✓"
         id="authConfirmPassword"
-        label="Nhập lại Password"
+        label="Nhập lại mật khẩu"
         onFieldBlur={onFieldBlur}
         onFieldValueChange={onFieldValueChange}
         placeholder="Nhập lại mật khẩu"
@@ -476,7 +476,7 @@ function AuthLoggedOutContent({
           label="Email"
           onFieldBlur={onFieldBlur}
           onFieldValueChange={onFieldValueChange}
-          placeholder="name@email.com"
+          placeholder="vidu@email.com"
           type="email"
           validationError={emailError}
         />
@@ -493,7 +493,7 @@ function AuthLoggedOutContent({
         ) : null}
 
         <div className="form-group auth-form-group">
-          <label htmlFor="authPassword">Password</label>
+          <label htmlFor="authPassword">Mật khẩu</label>
           <div className="auth-input-shell">
             <span className="auth-input-icon" aria-hidden="true">
               ⟡
@@ -507,7 +507,9 @@ function AuthLoggedOutContent({
                 onFieldValueChange("password", changeEvent.target.value)
               }
               placeholder={
-                isLoginTab ? "Enter your password" : "At least 8 characters"
+                isLoginTab
+                  ? "Nhập mật khẩu của bạn"
+                  : "Tối thiểu 8 ký tự, gồm chữ và số"
               }
               type="password"
               value={formValues.password}
